@@ -1,32 +1,35 @@
 import datetime
-from datetime import timedelta
 import json
 import os
 import logging
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
-import google.generativeai as genai
-from google.generativeai.types import GenerationConfig
-import PIL.Image 
-from typing import List, Dict, Any, Tuple, Optional
-from collections import deque
-from dateutil import parser
-from functools import lru_cache
 import hashlib
+import threading  # Wajib ada untuk Lock
+from concurrent.futures import ThreadPoolExecutor
+from collections import deque
+from functools import lru_cache
+from typing import List, Dict, Any, Tuple, Optional
+import time
 
+# Third-party imports
+import PIL.Image
+from dateutil import parser
+from google import genai
+from google.genai import types
 from pymeteosource.api import Meteosource
 from pymeteosource.types import tiers
 
+# Local imports
 from src.config import (
-    GOOGLE_API_KEYS, 
-    CHAT_MODEL, 
+    GOOGLE_API_KEYS,
+    CHAT_MODEL,
     ANALYSIS_MODEL,
     FIRST_LEVEL_ANALYZER_MODEL,
-    INSTRUCTION, 
-    ANALYSIS_PROMPT, 
+    INSTRUCTION,
+    ANALYSIS_PROMPT,
     FIRST_LEVEL_ANALYSIS_INSTRUCTION,
     AVAILABLE_CHAT_MODELS,
-    METEOSOURCE_API_KEY, 
+    METEOSOURCE_API_KEY,
     set_chat_model
 )
 
@@ -42,52 +45,67 @@ class ChatHandler:
         self.analyzer = analyzer
         self.scheduler_service = scheduler_service
         
+        # API Configuration
         self.api_keys = GOOGLE_API_KEYS
         self.current_key_index = 0
         self.key_health_status = {i: True for i in range(len(self.api_keys))}
+        
+        # GenAI Client
+        self.client: Optional[genai.Client] = None
         self._configure_genai()
         
+        # Models
         self.chat_model_name = CHAT_MODEL
         self.analysis_model_name = ANALYSIS_MODEL
         self.first_level_model_name = FIRST_LEVEL_ANALYZER_MODEL
         
-        self.chat_instance = None
-        self.analysis_instance = None
-        self.first_level_instance = None
-        
-        self._init_models()
-        
+        # Session State Management
         self.active_sessions: Dict[str, deque] = {}
         self.session_summaries: Dict[str, str] = {}
         self.last_interactions: Dict[str, datetime.datetime] = {}
         self.context_cache: Dict[str, Tuple[str, datetime.datetime]] = {}
         
-        self.MAX_HISTORY_LENGTH = 40 
+        # Constants
+        self.MAX_HISTORY_LENGTH = 40
         self.SESSION_DIR = "storage/sessions"
-        self.IMG_PREFIX = ":::IMG_PATH:::" 
+        self.IMG_PREFIX = ":::IMG_PATH:::"
         
+        # Location Defaults (Indonesia)
         self.DEFAULT_LAT = -7.6398581
         self.DEFAULT_LON = 112.2395766
         
+        # Weather Caching
         self._cached_weather = None      
         self._last_weather_fetch = None
-        self._weather_cache_duration = 900
+        self._weather_cache_duration = 900  # 15 minutes
         
+        # Concurrency & Locking
         self.executor = ThreadPoolExecutor(max_workers=3)
-        
         self._analysis_queue = asyncio.Queue() if hasattr(asyncio, 'Queue') else None
-        self._session_lock = {}
+        
+        # --- PERBAIKAN UTAMA DI SINI ---
+        # Inisialisasi Lock dan Flags
+        self._session_processing_flags: Dict[str, bool] = {}
+        self._flag_lock = threading.Lock() 
         
         if not os.path.exists(self.SESSION_DIR):
             os.makedirs(self.SESSION_DIR)
 
     def _configure_genai(self):
+        """Inisialisasi Client Google GenAI."""
         if not self.api_keys:
             logger.critical("[SYSTEM] No Google API KEY available!")
             raise ValueError("No API keys configured")
-        genai.configure(api_key=self.api_keys[self.current_key_index])
+        
+        try:
+            self.client = genai.Client(api_key=self.api_keys[self.current_key_index])
+            logger.info(f"[SYSTEM] GenAI Client initialized with key index {self.current_key_index}")
+        except Exception as e:
+            logger.error(f"[INIT-ERROR] Failed to initialize GenAI Client: {e}")
+            raise
 
     def _rotate_api_key(self) -> bool:
+        """Rotasi API Key jika quota habis atau error."""
         if len(self.api_keys) <= 1: 
             return False
         
@@ -98,10 +116,12 @@ class ChatHandler:
             self.current_key_index = (self.current_key_index + 1) % len(self.api_keys)
             
             if self.key_health_status.get(self.current_key_index, True):
-                self._configure_genai()
-                logger.warning(f"[SYSTEM] Rotated to API key index {self.current_key_index}")
-                self._init_models()
-                return True
+                try:
+                    self._configure_genai()
+                    logger.warning(f"[SYSTEM] Rotated to API key index {self.current_key_index}")
+                    return True
+                except Exception:
+                    pass
             
             attempts += 1
         
@@ -113,34 +133,12 @@ class ChatHandler:
         self.key_health_status[key_index] = False
         logger.warning(f"[SYSTEM] Marked API key {key_index} as unhealthy")
 
-    def _init_models(self):
-        try:
-            self.chat_instance = genai.GenerativeModel(
-                model_name=self.chat_model_name,
-                system_instruction=INSTRUCTION
-            )
-            
-            self.first_level_instance = genai.GenerativeModel(
-                model_name=self.first_level_model_name
-            )
-
-            self.analysis_instance = genai.GenerativeModel(
-                model_name=self.analysis_model_name,
-                system_instruction=ANALYSIS_PROMPT
-            )
-            
-            logger.info(f"[INIT] Models loaded - Chat: {self.chat_model_name}, L1: {self.first_level_model_name}, L2: {self.analysis_model_name}")
-        except Exception as e:
-            logger.error(f"[INIT-ERROR] Failed to load models: {e}")
-            raise
-
     def change_model(self, model_name: str):
         if model_name not in AVAILABLE_CHAT_MODELS:
             raise ValueError(f"Model {model_name} not available. Available: {AVAILABLE_CHAT_MODELS}")
         
         self.chat_model_name = model_name
         set_chat_model(model_name)
-        self._init_models()
         logger.info(f"[SYSTEM] Chat model changed to: {model_name}")
 
     def _format_time_gap(self, last_time: Optional[datetime.datetime]) -> str:
@@ -248,18 +246,21 @@ class ChatHandler:
         return context
 
     def process_message(self, user_id: str, user_text: str, image_path: str = None) -> str:
-        if user_id not in self._session_lock:
-            self._session_lock[user_id] = False
-        
-        if self._session_lock[user_id]:
-            return "Mohon tunggu, pesan sebelumnya masih diproses..."
-        
-        self._session_lock[user_id] = True
+        # Menggunakan _flag_lock yang sudah diinisialisasi di __init__
+        with self._flag_lock:
+            if user_id not in self._session_processing_flags:
+                self._session_processing_flags[user_id] = False
+            
+            if self._session_processing_flags[user_id]:
+                return "Mohon tunggu, pesan sebelumnya masih diproses..."
+            
+            self._session_processing_flags[user_id] = True
         
         try:
             return self._process_message_internal(user_id, user_text, image_path)
         finally:
-            self._session_lock[user_id] = False
+            with self._flag_lock:
+                self._session_processing_flags[user_id] = False
 
     def _process_message_internal(self, user_id: str, user_text: str, image_path: str = None) -> str:
         history = self.get_session_history(user_id)
@@ -282,9 +283,10 @@ class ChatHandler:
             logger.info(f"[COLLISION] Merging schedule {pending_sched['id']} into chat")
 
         system_context = self._build_context(user_id, current_summary, relevant_memories, schedule_ctx)
-        full_prompt = f"{system_context}\n\n[PESAN BARU]\nUser: {user_text}"
         
-        chat_input = [full_prompt]
+        full_prompt_text = f"{system_context}\n\n[PESAN BARU]\nUser: {user_text}"
+        
+        chat_input = [types.Part(text=full_prompt_text)]
         if image_path and os.path.exists(image_path):
             try: 
                 img = PIL.Image.open(image_path)
@@ -306,49 +308,44 @@ class ChatHandler:
         
         return vira_response
 
-    def _generate_with_retry(self, gemini_history: List[Dict], chat_input: List, 
+    def _generate_with_retry(self, gemini_history: List[types.Content], chat_input: List, 
                             user_id: str, user_text: str, image_path: str, 
                             max_retries: int = 2) -> str:
-        
-        from google.generativeai.types import HarmCategory, HarmBlockThreshold
-        
-        safety_settings = {
-            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-        }
-        
+        gen_config = types.GenerateContentConfig(
+            temperature=0.55,
+            top_p=0.85,
+            top_k=40,
+            max_output_tokens=2048,
+            system_instruction=INSTRUCTION
+        )
+
         for attempt in range(max_retries + 1):
             try:
-                chat_session = self.chat_instance.start_chat(history=gemini_history)
-                response = chat_session.send_message(
-                    chat_input,
-                    generation_config=GenerationConfig(
-                        temperature=0.85,
-                        top_p=0.95,
-                        top_k=40,
-                        max_output_tokens=2048
-                    ),
-                    safety_settings=safety_settings
+                chat = self.client.chats.create(
+                    model=self.chat_model_name,
+                    history=gemini_history,
+                    config=gen_config
                 )
-                return response.text
+                
+                response = chat.send_message(chat_input)
+                
+                if response.text:
+                    return response.text
+                return ""
                 
             except Exception as e:
                 error_str = str(e).lower()
                 logger.error(f"[CHAT-FAIL] Attempt {attempt + 1}: {e}")
                 
-                if "quota" in error_str or "429" in error_str or "resource_exhausted" in error_str:
+                if any(x in error_str for x in ["quota", "429", "resource_exhausted"]):
                     self._mark_key_unhealthy(self.current_key_index)
-                    
                     if self._rotate_api_key():
                         continue
                     else:
                         return "Maaf, semua API sedang sibuk. Coba lagi sebentar lagi."
                 
-                elif "500" in error_str or "503" in error_str:
+                elif any(x in error_str for x in ["500", "503"]):
                     if attempt < max_retries:
-                        import time
                         time.sleep(2 ** attempt)
                         continue
                 
@@ -370,19 +367,21 @@ class ChatHandler:
         )
 
         try:
-            gemma_res = self.first_level_instance.generate_content(
-                gemma_input_prompt,
-                generation_config=GenerationConfig(
+            gemma_res = self.client.models.generate_content(
+                model=self.first_level_model_name,
+                contents=gemma_input_prompt,
+                config=types.GenerateContentConfig(
                     temperature=0.4,
                     max_output_tokens=2048
                 )
             )
             gemma_insight = gemma_res.text
-            logger.debug(f"[GEMMA] {gemma_insight}...")
             
             now_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             
-            flash_prompt = (
+            L2_analysis_prompt = (
+                f"{ANALYSIS_PROMPT}\n\n"
+                f"--- START INTERACTION TO ANALYZE ---\n"
                 f"[CURRENT SYSTEM TIME]: {now_str}\n"
                 f"[EXPERT ANALYSIS SOURCE]\n{gemma_insight}\n\n"
                 f"[ORIGINAL CONTEXT]\nUser: {user_text}\nAI: {vira_text}\nSummary: {old_summary}\n\n"
@@ -393,30 +392,34 @@ class ChatHandler:
                 f"3. Prioritize quality over quantity\n"
             )
             
-            flash_res = self.analysis_instance.generate_content(
-                flash_prompt,
-                generation_config=GenerationConfig(
-                    response_mime_type="application/json",
-                    temperature=0.1
+            flash_res = self.client.models.generate_content(
+                model=self.analysis_model_name,
+                contents=L2_analysis_prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.1,
                 )
             )
             
-            logger.debug(f"[FLASH] {flash_res.text[:200]}...")
+            logger.info(f"[ANALYSIS-OUTPUT] {flash_res.text}")
             data = self._safe_json_parse(flash_res.text)
             
             if data:
                 self._process_analysis_results(user_id, data)
                 
         except Exception as e:
-            logger.error(f"[ANALYSIS-PIPELINE] Error: {e}", exc_info=True)
+            logger.error(f"[ANALYSIS-PIPELINE] Error: {e}")
 
     def _safe_json_parse(self, text: str) -> Optional[Dict]:
         try:
             cleaned = text.strip()
-            if cleaned.startswith("```json"):
-                cleaned = cleaned[7:]
-            if cleaned.endswith("```"):
-                cleaned = cleaned[:-3]
+            if cleaned.startswith("```"):
+                lines = cleaned.splitlines()
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines[-1].startswith("```"):
+                    lines = lines[:-1]
+                cleaned = "\n".join(lines)
+            
             cleaned = cleaned.strip()
             return json.loads(cleaned)
         except json.JSONDecodeError as e:
@@ -492,15 +495,20 @@ class ChatHandler:
         gemini_history = self._prepare_history_for_gemini(history)
         
         try:
-            chat_session = self.chat_instance.start_chat(history=gemini_history)
-            response = chat_session.send_message(
-                proactive_prompt,
-                generation_config=GenerationConfig(
-                    temperature=0.9,
-                    max_output_tokens=512
+            chat = self.client.chats.create(
+                model=self.chat_model_name,
+                history=gemini_history,
+                config=types.GenerateContentConfig(
+                    temperature=0.55,
+                    top_p=0.85,
+                    top_k=40,
+                    max_output_tokens=2048,
+                    system_instruction=INSTRUCTION
                 )
             )
+            response = chat.send_message(types.Part(text=proactive_prompt))
             vira_text = response.text
+            
             self._update_local_history(user_id, "(System Reminder)", vira_text, None)
             return vira_text
         except Exception as e:
@@ -543,7 +551,7 @@ class ChatHandler:
         self.last_interactions[user_id] = datetime.datetime.now()
         self._save_session_to_disk(user_id)
 
-    def _prepare_history_for_gemini(self, raw_history: deque) -> List[Dict]:
+    def _prepare_history_for_gemini(self, raw_history: deque) -> List[types.Content]:
         gemini_history = []
         for msg in raw_history:
             parts = []
@@ -553,16 +561,25 @@ class ChatHandler:
                         path = item.replace(self.IMG_PREFIX, "")
                         if os.path.exists(path):
                             try: 
-                                parts.append(PIL.Image.open(path))
+                                img = PIL.Image.open(path)
+                                parts.append(img)
                             except Exception as e:
                                 logger.error(f"[IMG-LOAD-ERROR] {e}")
                     else:
-                        parts.append(item)
+                        parts.append(types.Part(text=item))
                 else:
-                    parts.append(item)
+                    if isinstance(item, str):
+                        parts.append(types.Part(text=item))
+                    else:
+                        parts.append(item)
             
             if parts:
-                gemini_history.append({"role": msg["role"], "parts": parts})
+                gemini_history.append(
+                    types.Content(
+                        role=msg["role"],
+                        parts=parts 
+                    )
+                )
         
         return gemini_history
 
@@ -583,7 +600,7 @@ class ChatHandler:
                 if last_ts and last_ts != "None":
                     try:
                         self.last_interactions[user_id] = datetime.datetime.fromisoformat(last_ts)
-                    except:
+                    except ValueError:
                         self.last_interactions[user_id] = None
                 else:
                     self.last_interactions[user_id] = None
@@ -601,11 +618,11 @@ class ChatHandler:
 
     def _save_session_to_disk(self, user_id: str):
         try:
+            last_interaction = self.last_interactions.get(user_id)
             data = {
                 "summary": self.session_summaries.get(user_id, ""),
                 "history": list(self.active_sessions.get(user_id, [])),
-                "last_interaction_ts": self.last_interactions.get(user_id).isoformat() 
-                    if self.last_interactions.get(user_id) else None
+                "last_interaction_ts": last_interaction.isoformat() if last_interaction else None
             }
             
             path = self._get_session_path(user_id)

@@ -96,7 +96,7 @@ async def scheduled_maintenance(context: ContextTypes.DEFAULT_TYPE):
         cleaned = await asyncio.to_thread(scheduler.cleanup_old_schedules, days_old=30)
         logger.info(f"[MAINTENANCE] Cleaned {cleaned} old schedules")
         
-        await cleanup_inactive_locks()
+        await cleanup_inactive_locks
         
         logger.info("[MAINTENANCE] Complete")
     except Exception as e:
@@ -840,7 +840,7 @@ async def post_init(application: Application):
         )
         
         application.job_queue.run_repeating(
-            cleanup_inactive_locks(),
+            cleanup_inactive_locks,
             interval=1800,
             first=600
         )

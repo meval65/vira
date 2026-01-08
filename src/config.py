@@ -17,7 +17,7 @@ METEOSOURCE_API_KEY = os.getenv("METEOSOURCE_API_KEY")
 
 CHAT_MODEL = os.getenv("CHAT_MODEL") 
 EMBEDDING_MODEL = "nomic-embed-text"
-ANALYSIS_MODEL = "models/gemini-2.5-flash-lite" # Model khusus analisis 
+ANALYSIS_MODEL = "models/gemma-3-27b-it" # Model khusus analisis 
 FIRST_LEVEL_ANALYZER_MODEL = "models/gemma-3-27b-it"
 
 AVAILABLE_CHAT_MODELS = [
