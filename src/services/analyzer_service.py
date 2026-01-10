@@ -1,6 +1,7 @@
 import logging
 import hashlib
-from typing import List, Optional
+import numpy as np
+from typing import List, Optional, Dict
 from functools import lru_cache
 from openai import OpenAI
 from src.config import OLLAMA_BASE_URL, EMBEDDING_MODEL
@@ -13,10 +14,18 @@ class MemoryAnalyzer:
             base_url=OLLAMA_BASE_URL,
             api_key="ollama",
         )
-        self.embedding_cache = {}
+        self.embedding_cache: Dict[str, List[float]] = {}
         self.MAX_CACHE_SIZE = 500
         self.MAX_TEXT_LENGTH = 8000
+        self.expected_dimension = None
+        self._cache_lock = None
         
+        try:
+            import threading
+            self._cache_lock = threading.Lock()
+        except ImportError:
+            pass
+    
     def _get_cache_key(self, text: str) -> str:
         return hashlib.md5(text.encode('utf-8')).hexdigest()
     
@@ -30,11 +39,18 @@ class MemoryAnalyzer:
         if not clean_text:
             return []
         
+        cache_key = self._get_cache_key(clean_text)
+        
         if use_cache:
-            cache_key = self._get_cache_key(clean_text)
-            if cache_key in self.embedding_cache:
-                logger.debug(f"[EMBED] Cache hit for text: {clean_text[:30]}...")
-                return self.embedding_cache[cache_key]
+            if self._cache_lock:
+                with self._cache_lock:
+                    if cache_key in self.embedding_cache:
+                        logger.debug(f"[EMBED] Cache hit for text: {clean_text[:30]}...")
+                        return self.embedding_cache[cache_key]
+            else:
+                if cache_key in self.embedding_cache:
+                    logger.debug(f"[EMBED] Cache hit for text: {clean_text[:30]}...")
+                    return self.embedding_cache[cache_key]
         
         try:
             response = self.client.embeddings.create(
@@ -48,12 +64,15 @@ class MemoryAnalyzer:
                 logger.error("[EMBED] Empty embedding returned")
                 return []
             
-            if use_cache and len(self.embedding_cache) < self.MAX_CACHE_SIZE:
-                self.embedding_cache[cache_key] = embedding
-            elif use_cache and len(self.embedding_cache) >= self.MAX_CACHE_SIZE:
-                oldest_key = next(iter(self.embedding_cache))
-                del self.embedding_cache[oldest_key]
-                self.embedding_cache[cache_key] = embedding
+            if self.expected_dimension is None:
+                self.expected_dimension = len(embedding)
+                logger.info(f"[EMBED] Set expected dimension to {self.expected_dimension}")
+            elif len(embedding) != self.expected_dimension:
+                logger.error(f"[EMBED] Dimension mismatch! Expected {self.expected_dimension}, got {len(embedding)}")
+                return []
+            
+            if use_cache:
+                self._add_to_cache(cache_key, embedding)
             
             logger.debug(f"[EMBED] Generated embedding of dimension {len(embedding)}")
             return embedding
@@ -61,6 +80,19 @@ class MemoryAnalyzer:
         except Exception as e:
             logger.error(f"[EMBED-FAIL] Error: {e}", exc_info=True)
             return []
+    
+    def _add_to_cache(self, cache_key: str, embedding: List[float]):
+        if self._cache_lock:
+            with self._cache_lock:
+                if len(self.embedding_cache) >= self.MAX_CACHE_SIZE:
+                    oldest_key = next(iter(self.embedding_cache))
+                    del self.embedding_cache[oldest_key]
+                self.embedding_cache[cache_key] = embedding
+        else:
+            if len(self.embedding_cache) >= self.MAX_CACHE_SIZE:
+                oldest_key = next(iter(self.embedding_cache))
+                del self.embedding_cache[oldest_key]
+            self.embedding_cache[cache_key] = embedding
     
     def _preprocess_text(self, text: str) -> str:
         clean_text = text.replace("\n", " ").replace("\r", " ")
@@ -87,11 +119,17 @@ class MemoryAnalyzer:
                 continue
             
             clean_text = self._preprocess_text(text)
+            cache_key = self._get_cache_key(clean_text)
             
             if use_cache:
-                cache_key = self._get_cache_key(clean_text)
-                if cache_key in self.embedding_cache:
-                    results.append(self.embedding_cache[cache_key])
+                if self._cache_lock:
+                    with self._cache_lock:
+                        cached_emb = self.embedding_cache.get(cache_key)
+                else:
+                    cached_emb = self.embedding_cache.get(cache_key)
+                
+                if cached_emb:
+                    results.append(cached_emb)
                     continue
             
             results.append(None)
@@ -110,11 +148,19 @@ class MemoryAnalyzer:
             for i, embedding_data in enumerate(response.data):
                 embedding = embedding_data.embedding
                 idx = uncached_indices[i]
+                
+                if self.expected_dimension is None:
+                    self.expected_dimension = len(embedding)
+                elif len(embedding) != self.expected_dimension:
+                    logger.error(f"[EMBED-BATCH] Dimension mismatch at index {i}")
+                    results[idx] = []
+                    continue
+                
                 results[idx] = embedding
                 
-                if use_cache and len(self.embedding_cache) < self.MAX_CACHE_SIZE:
+                if use_cache:
                     cache_key = self._get_cache_key(uncached_texts[i])
-                    self.embedding_cache[cache_key] = embedding
+                    self._add_to_cache(cache_key, embedding)
             
             logger.info(f"[EMBED-BATCH] Generated {len(uncached_texts)} embeddings")
             
@@ -135,9 +181,8 @@ class MemoryAnalyzer:
             return 0.0
         
         try:
-            import numpy as np
-            vec1 = np.array(embedding1)
-            vec2 = np.array(embedding2)
+            vec1 = np.array(embedding1, dtype=np.float32)
+            vec2 = np.array(embedding2, dtype=np.float32)
             
             norm1 = np.linalg.norm(vec1)
             norm2 = np.linalg.norm(vec2)
@@ -152,21 +197,66 @@ class MemoryAnalyzer:
             logger.error(f"[SIMILARITY-FAIL] Error: {e}")
             return 0.0
     
+    def normalize_embedding(self, embedding: List[float]) -> List[float]:
+        if not embedding:
+            return []
+        
+        try:
+            vec = np.array(embedding, dtype=np.float32)
+            norm = np.linalg.norm(vec)
+            
+            if norm == 0:
+                return embedding
+            
+            normalized = vec / norm
+            return normalized.tolist()
+            
+        except Exception as e:
+            logger.error(f"[NORMALIZE-FAIL] Error: {e}")
+            return embedding
+    
+    def validate_embedding_dimension(self, embedding: List[float]) -> bool:
+        if not embedding:
+            return False
+        
+        if self.expected_dimension is None:
+            return True
+        
+        return len(embedding) == self.expected_dimension
+    
     def clear_cache(self):
-        self.embedding_cache.clear()
+        if self._cache_lock:
+            with self._cache_lock:
+                self.embedding_cache.clear()
+        else:
+            self.embedding_cache.clear()
         logger.info("[EMBED] Cache cleared")
     
     def get_cache_stats(self) -> dict:
+        if self._cache_lock:
+            with self._cache_lock:
+                cache_size = len(self.embedding_cache)
+        else:
+            cache_size = len(self.embedding_cache)
+        
         return {
-            "cache_size": len(self.embedding_cache),
+            "cache_size": cache_size,
             "max_size": self.MAX_CACHE_SIZE,
-            "utilization": len(self.embedding_cache) / self.MAX_CACHE_SIZE
+            "utilization": cache_size / self.MAX_CACHE_SIZE,
+            "expected_dimension": self.expected_dimension
         }
     
     def health_check(self) -> bool:
         try:
             test_embedding = self.get_embedding("test", use_cache=False)
-            return len(test_embedding) > 0
+            if not test_embedding or len(test_embedding) == 0:
+                return False
+            
+            if self.expected_dimension and len(test_embedding) != self.expected_dimension:
+                logger.error(f"[EMBED-HEALTH] Dimension mismatch in health check")
+                return False
+            
+            return True
         except Exception as e:
             logger.error(f"[EMBED-HEALTH] Health check failed: {e}")
             return False

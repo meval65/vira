@@ -7,6 +7,7 @@ from typing import List, Tuple, Any, Optional, Dict
 from functools import lru_cache
 import threading
 from collections import defaultdict
+import time
 
 from src.database import DBConnection
 from src.config import (
@@ -22,18 +23,68 @@ class MemoryManager:
     def __init__(self, db: DBConnection):
         self.db = db
         self.SIMILARITY_THRESHOLD = 0.92
-        self.DEDUP_BATCH_SIZE = 500
+        self.DEDUP_BATCH_SIZE_MIN = 100
+        self.DEDUP_BATCH_SIZE_MAX = 1000
         self._lock = threading.RLock()
         self._embedding_cache = {}
         self._stats_cache = {}
+        self._normalized_cache = {}
         self.MAX_CACHE_SIZE = 1000
         self.CACHE_TTL = 300
+        self.expected_dimension = None
+        self._cache_timestamps = {}
+        self._last_cleanup = time.time()
+        self.CLEANUP_INTERVAL = 600
 
-    def _normalize(self, vector: np.ndarray) -> np.ndarray:
+    def _cleanup_expired_cache(self):
+        now = time.time()
+        if now - self._last_cleanup < self.CLEANUP_INTERVAL:
+            return
+            
+        expired_keys = [
+            k for k, ts in self._cache_timestamps.items() 
+            if now - ts > self.CACHE_TTL
+        ]
+        
+        for key in expired_keys:
+            self._embedding_cache.pop(key, None)
+            self._normalized_cache.pop(key, None)
+            self._cache_timestamps.pop(key, None)
+        
+        self._last_cleanup = now
+        if expired_keys:
+            logger.debug(f"[CACHE] Cleaned {len(expired_keys)} expired entries")
+
+    def _normalize(self, vector: np.ndarray, cache_key: str = None) -> np.ndarray:
+        if cache_key and cache_key in self._normalized_cache:
+            return self._normalized_cache[cache_key]
+        
         norm = np.linalg.norm(vector)
         if norm == 0:
             return vector
-        return vector / norm
+        
+        normalized = vector / norm
+        
+        if cache_key and len(self._normalized_cache) < self.MAX_CACHE_SIZE:
+            self._normalized_cache[cache_key] = normalized
+            self._cache_timestamps[cache_key] = time.time()
+        
+        return normalized
+
+    def _validate_dimension(self, vector: np.ndarray) -> bool:
+        if vector is None or len(vector) == 0:
+            return False
+        
+        if self.expected_dimension is None:
+            self.expected_dimension = len(vector)
+            logger.info(f"[MEMORY] Set expected dimension to {self.expected_dimension}")
+            return True
+        
+        if len(vector) != self.expected_dimension:
+            logger.error(f"[MEMORY] Dimension mismatch! Expected {self.expected_dimension}, got {len(vector)}")
+            return False
+        
+        return True
 
     def _parse_embedding(self, emb_data: Any) -> Optional[np.ndarray]:
         if emb_data is None: 
@@ -43,7 +94,9 @@ class MemoryManager:
         if isinstance(emb_data, bytes):
             cache_key = hash(emb_data)
             if cache_key in self._embedding_cache:
-                return self._embedding_cache[cache_key]
+                cached_time = self._cache_timestamps.get(cache_key, 0)
+                if time.time() - cached_time < self.CACHE_TTL:
+                    return self._embedding_cache[cache_key]
         
         try:
             if isinstance(emb_data, bytes):
@@ -53,8 +106,12 @@ class MemoryManager:
             else:
                 return None
             
+            if not self._validate_dimension(vec):
+                return None
+            
             if cache_key and len(self._embedding_cache) < self.MAX_CACHE_SIZE:
                 self._embedding_cache[cache_key] = vec
+                self._cache_timestamps[cache_key] = time.time()
             
             return vec
             
@@ -70,6 +127,8 @@ class MemoryManager:
         priority = max(0.0, min(1.0, priority))
 
         with self._lock:
+            self._cleanup_expired_cache()
+            
             cursor = self.db.get_cursor()
             
             vec_new = None
@@ -77,6 +136,11 @@ class MemoryManager:
             
             if embedding:
                 vec_new = np.array(embedding, dtype=np.float32)
+                
+                if not self._validate_dimension(vec_new):
+                    logger.error(f"[MEMORY-ADD] Invalid embedding dimension for: {clean_summary[:30]}")
+                    return
+                
                 vec_new = self._normalize(vec_new)
                 embedding_blob = vec_new.tobytes()
 
@@ -109,11 +173,28 @@ class MemoryManager:
             except Exception as e:
                 logger.error(f"[MEMORY-ERROR] Failed to save: {e}")
 
-    def _find_semantic_duplicate(self, user_id: str, new_vector: np.ndarray) -> Optional[str]:
+    def _get_optimal_batch_size(self, user_id: str) -> int:
         cursor = self.db.get_cursor()
         cursor.execute(
-            "SELECT id, embedding FROM memories WHERE user_id=? AND status='active' ORDER BY last_used_at DESC LIMIT ?", 
-            (user_id, self.DEDUP_BATCH_SIZE)
+            "SELECT COUNT(*) FROM memories WHERE user_id=? AND status='active' AND embedding IS NOT NULL",
+            (user_id,)
+        )
+        count = cursor.fetchone()[0]
+        
+        if count < 200:
+            return min(count, self.DEDUP_BATCH_SIZE_MIN)
+        elif count < 1000:
+            return min(count, 300)
+        else:
+            return self.DEDUP_BATCH_SIZE_MAX
+
+    def _find_semantic_duplicate(self, user_id: str, new_vector: np.ndarray) -> Optional[str]:
+        cursor = self.db.get_cursor()
+        batch_size = self._get_optimal_batch_size(user_id)
+        
+        cursor.execute(
+            "SELECT id, embedding FROM memories WHERE user_id=? AND status='active' AND embedding IS NOT NULL ORDER BY last_used_at DESC LIMIT ?", 
+            (user_id, batch_size)
         )
         rows = cursor.fetchall()
         
@@ -132,14 +213,17 @@ class MemoryManager:
         if not embeddings:
             return None
         
-        matrix = np.array(embeddings)
-        scores = np.dot(matrix, new_vector)
-        
-        max_idx = np.argmax(scores)
-        max_score = scores[max_idx]
-        
-        if max_score >= self.SIMILARITY_THRESHOLD:
-            return ids[max_idx]
+        try:
+            matrix = np.array(embeddings, dtype=np.float32)
+            scores = np.dot(matrix, new_vector)
+            
+            max_idx = np.argmax(scores)
+            max_score = scores[max_idx]
+            
+            if max_score >= self.SIMILARITY_THRESHOLD:
+                return ids[max_idx]
+        except Exception as e:
+            logger.error(f"[DEDUP-ERROR] {e}")
         
         return None
 
@@ -165,7 +249,9 @@ class MemoryManager:
         
         if max_results is None:
             max_results = MAX_RETRIEVED_MEMORIES
-            
+        
+        self._cleanup_expired_cache()
+        
         cursor = self.db.get_cursor()
         
         query = """
@@ -207,28 +293,35 @@ class MemoryManager:
 
         if query_embedding and memories_with_emb:
             q_vec = np.array(query_embedding, dtype=np.float32)
-            q_vec = self._normalize(q_vec)
+            
+            if not self._validate_dimension(q_vec):
+                logger.warning("[MEMORY-RETRIEVE] Query embedding dimension mismatch, using fallback")
+            else:
+                q_vec = self._normalize(q_vec, cache_key=f"query_{hash(tuple(query_embedding))}")
 
-            vectors = [m[1] for m in memories_with_emb]
-            priorities = np.array([m[2] for m in memories_with_emb])
-            use_counts = np.array([m[3] for m in memories_with_emb])
-            indices = [m[0] for m in memories_with_emb]
-            
-            matrix = np.array(vectors)
-            sim_scores = np.dot(matrix, q_vec)
-            
-            recency_scores = self._calculate_recency_scores([all_data[i][4] for i in indices])
-            use_count_scores = np.log1p(use_counts) / 10.0
-            
-            final_scores = (
-                sim_scores * 0.60 + 
-                priorities * 0.20 + 
-                recency_scores * 0.15 + 
-                use_count_scores * 0.05
-            )
+                vectors = [m[1] for m in memories_with_emb]
+                priorities = np.array([m[2] for m in memories_with_emb], dtype=np.float32)
+                use_counts = np.array([m[3] for m in memories_with_emb], dtype=np.float32)
+                indices = [m[0] for m in memories_with_emb]
+                
+                try:
+                    matrix = np.array(vectors, dtype=np.float32)
+                    sim_scores = np.dot(matrix, q_vec)
+                    
+                    recency_scores = self._calculate_recency_scores([all_data[i][4] for i in indices])
+                    use_count_scores = np.log1p(use_counts) / 10.0
+                    
+                    final_scores = (
+                        sim_scores * 0.60 + 
+                        priorities * 0.20 + 
+                        recency_scores * 0.15 + 
+                        use_count_scores * 0.05
+                    )
 
-            for idx, score in zip(indices, final_scores):
-                scored_results.append((score, idx))
+                    for idx, score in zip(indices, final_scores):
+                        scored_results.append((score, idx))
+                except Exception as e:
+                    logger.error(f"[MEMORY-SCORING] Error: {e}")
 
         for idx, prio, use_count in memories_no_emb:
             recency = self._calculate_recency_score(all_data[idx][4])
@@ -279,7 +372,7 @@ class MemoryManager:
             
             days_ago = (datetime.now() - last_used).total_seconds() / 86400
             
-            return np.exp(-days_ago / 30.0)
+            return float(np.exp(-days_ago / 30.0))
         except:
             return 0.0
 
@@ -287,7 +380,7 @@ class MemoryManager:
         scores = []
         for last_used in last_used_list:
             scores.append(self._calculate_recency_score(last_used))
-        return np.array(scores)
+        return np.array(scores, dtype=np.float32)
 
     def _mark_batch_as_used(self, memory_ids: List[str]):
         if not memory_ids: 
@@ -296,14 +389,22 @@ class MemoryManager:
         with self._lock:
             cursor = self.db.get_cursor()
             now = datetime.now()
-            placeholders = ','.join('?' * len(memory_ids))
-            query = f"UPDATE memories SET use_count = use_count + 1, last_used_at = ? WHERE id IN ({placeholders})"
+            
+            chunk_size = 100
+            for i in range(0, len(memory_ids), chunk_size):
+                chunk = memory_ids[i:i + chunk_size]
+                placeholders = ','.join('?' * len(chunk))
+                query = f"UPDATE memories SET use_count = use_count + 1, last_used_at = ? WHERE id IN ({placeholders})"
+                
+                try:
+                    cursor.execute(query, [now] + chunk)
+                except Exception as e:
+                    logger.error(f"[MEMORY-ERROR] Batch update failed: {e}")
             
             try:
-                cursor.execute(query, [now] + memory_ids)
                 self.db.commit()
             except Exception as e:
-                logger.error(f"[MEMORY-ERROR] Batch update failed: {e}")
+                logger.error(f"[MEMORY-ERROR] Commit failed: {e}")
 
     def apply_decay_rules(self, user_id: str = None):
         with self._lock:
@@ -390,7 +491,7 @@ class MemoryManager:
                 users = cursor.fetchall()
                 total_archived = 0
                 
-                for user_id, count in users:
+                for uid, count in users:
                     to_remove = count - target_count
                     
                     cursor.execute("""
@@ -406,7 +507,7 @@ class MemoryManager:
                             ASC
                             LIMIT ?
                         )
-                    """, (user_id, to_remove))
+                    """, (uid, to_remove))
                     
                     total_archived += cursor.rowcount
                 
@@ -455,8 +556,8 @@ class MemoryManager:
             )
             avgs = cursor.fetchone()
             if avgs:
-                stats["avg_priority"] = round(avgs[0] or 0.0, 2)
-                stats["avg_use_count"] = round(avgs[1] or 0.0, 2)
+                stats["avg_priority"] = round(float(avgs[0] or 0.0), 2)
+                stats["avg_use_count"] = round(float(avgs[1] or 0.0), 2)
                 stats["total_retrievals"] = int(avgs[2] or 0)
             
             self._stats_cache[cache_key] = (stats, datetime.now())
@@ -529,6 +630,118 @@ class MemoryManager:
                 
         return False
 
+    def deduplicate_existing_memories(self, user_id: str, similarity_threshold: float = 0.95) -> Dict[str, int]:
+        with self._lock:
+            cursor = self.db.get_cursor()
+            
+            cursor.execute("""
+                SELECT id, summary, embedding, priority, use_count, created_at 
+                FROM memories 
+                WHERE user_id = ? AND status = 'active' AND embedding IS NOT NULL
+                ORDER BY last_used_at DESC
+            """, (user_id,))
+            
+            rows = cursor.fetchall()
+            if len(rows) < 2:
+                return {"processed": len(rows), "removed": 0}
+
+            ids = []
+            vectors = []
+            metadata = {}
+            
+            for r in rows:
+                m_id, summary, raw_emb, prio, uses, created = r
+                vec = self._parse_embedding(raw_emb)
+                
+                if vec is not None and self._validate_dimension(vec):
+                    vec = self._normalize(vec, cache_key=f"dedup_{m_id}")
+                    ids.append(m_id)
+                    vectors.append(vec)
+                    metadata[m_id] = {
+                        "priority": prio,
+                        "use_count": uses,
+                        "created_at": created,
+                        "summary": summary
+                    }
+
+            if not vectors:
+                return {"processed": 0, "removed": 0}
+
+            try:
+                matrix = np.array(vectors, dtype=np.float32)
+                similarity_matrix = np.dot(matrix, matrix.T)
+            except Exception as e:
+                logger.error(f"[DEDUP-MATRIX-ERR] {e}")
+                return {"error": str(e)}
+
+            memories_to_archive = set()
+            memories_to_update = {}
+            
+            count_removed = 0
+            n = len(ids)
+
+            for i in range(n):
+                if ids[i] in memories_to_archive:
+                    continue
+                    
+                for j in range(i + 1, n):
+                    if ids[j] in memories_to_archive:
+                        continue
+                        
+                    score = similarity_matrix[i][j]
+                    
+                    if score >= similarity_threshold:
+                        id_a = ids[i]
+                        id_b = ids[j]
+                        meta_a = metadata[id_a]
+                        meta_b = metadata[id_b]
+                        
+                        keep_a = False
+                        
+                        if meta_a['priority'] > meta_b['priority']:
+                            keep_a = True
+                        elif meta_b['priority'] > meta_a['priority']:
+                            keep_a = False
+                        elif meta_a['use_count'] > meta_b['use_count']:
+                            keep_a = True
+                        elif meta_b['use_count'] > meta_a['use_count']:
+                            keep_a = False
+                        else:
+                            keep_a = meta_a['created_at'] > meta_b['created_at']
+
+                        keeper_id = id_a if keep_a else id_b
+                        tosser_id = id_b if keep_a else id_a
+                        
+                        memories_to_archive.add(tosser_id)
+                        
+                        tosser_uses = metadata[tosser_id]['use_count']
+                        if tosser_uses > 0:
+                            memories_to_update[keeper_id] = memories_to_update.get(keeper_id, 0) + tosser_uses
+                        
+                        logger.info(f"[DEDUP] Merging '{metadata[tosser_id]['summary'][:30]}...' INTO '{metadata[keeper_id]['summary'][:30]}...' (Score: {score:.4f})")
+                        count_removed += 1
+
+            if memories_to_archive:
+                archive_list = list(memories_to_archive)
+                chunk_size = 100
+                
+                for i in range(0, len(archive_list), chunk_size):
+                    chunk = archive_list[i:i + chunk_size]
+                    placeholders = ','.join('?' * len(chunk))
+                    cursor.execute(f"UPDATE memories SET status='archived' WHERE id IN ({placeholders})", chunk)
+                
+                for m_id, added_uses in memories_to_update.items():
+                    cursor.execute("UPDATE memories SET use_count = use_count + ? WHERE id = ?", (added_uses, m_id))
+                
+                self.db.commit()
+                self._invalidate_cache(user_id)
+                
+            return {
+                "processed": n,
+                "removed": count_removed,
+                "survivors_boosted": len(memories_to_update)
+            }
+
     def get_memory_by_type(self, user_id: str, memory_type: str, limit: int = 20) -> List[Dict]:
         cursor = self.db.get_cursor()
         
@@ -560,6 +773,8 @@ class MemoryManager:
     def clear_cache(self):
         self._embedding_cache.clear()
         self._stats_cache.clear()
+        self._normalized_cache.clear()
+        self._cache_timestamps.clear()
         logger.info("[MEMORY] All caches cleared")
 
     def get_global_stats(self) -> Dict:
