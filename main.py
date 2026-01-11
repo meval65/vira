@@ -19,7 +19,7 @@ from src.database import DBConnection
 from src.services.memory_service import MemoryManager
 from src.services.analyzer_service import MemoryAnalyzer
 from src.services.scheduler_service import SchedulerService
-from src.services.chat_service import ChatHandler
+from src.services.chat_handler import ChatHandler
 from src.config import get_available_chat_models, CHAT_MODEL, EMBEDDING_MODEL
 
 load_dotenv()
@@ -27,7 +27,7 @@ TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.WARNING
+    level=logging.ERROR
 )
 logger = logging.getLogger(__name__)
 
@@ -392,6 +392,13 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Message process error: {e}")
             await update.message.reply_text("😵 System error occurred.")
+        
+        finally:
+            if img_path and os.path.exists(img_path):
+                try:
+                    os.remove(img_path)
+                except Exception as e:
+                    logger.error(f"Failed to cleanup temp image: {e}")
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Update error: {context.error}")
