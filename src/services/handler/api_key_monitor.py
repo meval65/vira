@@ -1,23 +1,23 @@
 import time
 import threading
 import logging
-from typing import Optional
+from typing import Optional, Dict
 
 logger = logging.getLogger(__name__)
 
 class APIKeyHealthMonitor:
     def __init__(self, num_keys: int):
-        self.health = {
+        self.health: Dict[int, Dict] = {
             i: {
                 'healthy': True,
                 'failures': 0,
-                'last_fail': None,
+                'last_fail': 0.0,
                 'consecutive_success': 0
             } for i in range(num_keys)
         }
         self.lock = threading.Lock()
         self.FAILURE_THRESHOLD = 3
-        self.RECOVERY_TIME = 600
+        self.RECOVERY_TIME = 300  # Dikurangi ke 5 menit
         self.SUCCESS_THRESHOLD = 2
     
     def mark_failure(self, key_index: int):
@@ -25,58 +25,57 @@ class APIKeyHealthMonitor:
             if key_index not in self.health:
                 return
             
-            self.health[key_index]['failures'] += 1
-            self.health[key_index]['last_fail'] = time.time()
-            self.health[key_index]['consecutive_success'] = 0
+            data = self.health[key_index]
+            data['failures'] += 1
+            data['last_fail'] = time.time()
+            data['consecutive_success'] = 0
             
-            if self.health[key_index]['failures'] >= self.FAILURE_THRESHOLD:
-                self.health[key_index]['healthy'] = False
-                logger.warning(f"[API-HEALTH] Key {key_index} marked unhealthy after {self.health[key_index]['failures']} failures")
+            if data['failures'] >= self.FAILURE_THRESHOLD:
+                data['healthy'] = False
+                logger.warning(f"[API-HEALTH] Key {key_index} marked UNHEALTHY (Failures: {data['failures']})")
     
     def mark_success(self, key_index: int):
         with self.lock:
             if key_index not in self.health:
                 return
             
-            self.health[key_index]['consecutive_success'] += 1
+            data = self.health[key_index]
+            data['consecutive_success'] += 1
             
-            if self.health[key_index]['consecutive_success'] >= self.SUCCESS_THRESHOLD:
-                self.health[key_index]['failures'] = 0
-                if not self.health[key_index]['healthy']:
-                    self.health[key_index]['healthy'] = True
-                    logger.info(f"[API-HEALTH] Key {key_index} recovered after consecutive successes")
+            if data['consecutive_success'] >= self.SUCCESS_THRESHOLD:
+                data['failures'] = 0
+                if not data['healthy']:
+                    data['healthy'] = True
+                    logger.info(f"[API-HEALTH] Key {key_index} RECOVERED")
     
     def get_healthy_key(self, current_index: int, total_keys: int) -> Optional[int]:
         with self.lock:
             now = time.time()
             
+            # Cek key lain mulai dari current_index + 1
             for offset in range(total_keys):
                 candidate = (current_index + offset) % total_keys
-                key_health = self.health.get(candidate)
+                data = self.health.get(candidate)
                 
-                if not key_health:
+                if not data:
                     continue
                 
-                if key_health['healthy']:
+                # Jika sehat, langsung pakai
+                if data['healthy']:
                     return candidate
                 
-                if key_health['last_fail']:
-                    time_since_fail = now - key_health['last_fail']
-                    if time_since_fail > self.RECOVERY_TIME:
-                        key_health['healthy'] = True
-                        key_health['failures'] = 0
-                        key_health['consecutive_success'] = 0
-                        logger.info(f"[API-HEALTH] Key {candidate} auto-recovered after {int(time_since_fail)}s")
-                        return candidate
+                # Coba auto-recovery jika sudah melewati masa cool-down
+                if now - data['last_fail'] > self.RECOVERY_TIME:
+                    data['healthy'] = True
+                    data['failures'] = 0
+                    data['consecutive_success'] = 0
+                    logger.info(f"[API-HEALTH] Key {candidate} AUTO-RECOVERED (Time elapsed)")
+                    return candidate
             
-            return None
-    
+            # Emergency: Jika semua mati, cari yang failure count-nya paling sedikit
+            logger.error("[API-HEALTH] All keys unhealthy. Forcing best candidate.")
+            return min(self.health.keys(), key=lambda k: self.health[k]['failures'])
+
     def get_status(self) -> dict:
         with self.lock:
-            return {
-                k: {
-                    'healthy': v['healthy'],
-                    'failures': v['failures'],
-                    'consecutive_success': v['consecutive_success']
-                } for k, v in self.health.items()
-            }
+            return {k: v.copy() for k, v in self.health.items()}
