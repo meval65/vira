@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vira Neural Dashboard</title>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-deep: #0a0a0f;
+            --bg-primary: #12121a;
+            --bg-secondary: #1a1a26;
+            --bg-card: #1e1e2e;
+            --bg-elevated: #252536;
+            --accent-primary: #7c3aed;
+            --accent-secondary: #a78bfa;
+            --accent-soft: rgba(124, 58, 237, 0.15);
+            --text-primary: #f1f1f4;
+            --text-secondary: #a0a0b0;
+            --text-muted: #6b6b7b;
+            --success: #34d399;
+            --success-soft: rgba(52, 211, 153, 0.15);
+            --warning: #fbbf24;
+            --warning-soft: rgba(251, 191, 36, 0.15);
+            --error: #f87171;
+            --error-soft: rgba(248, 113, 113, 0.15);
+            --border: rgba(255, 255, 255, 0.06);
+            --border-light: rgba(255, 255, 255, 0.1);
+            --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+            --shadow-soft: 0 2px 12px rgba(0, 0, 0, 0.2);
+            --radius: 16px;
+            --radius-sm: 10px;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-deep);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+
+        .app {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+            padding-bottom: 1.5rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .logo-icon {
+            width: 48px;
+            height: 48px;
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+            border-radius: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            box-shadow: 0 4px 16px rgba(124, 58, 237, 0.3);
+        }
+
+        .logo-text h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            background: linear-gradient(90deg, var(--text-primary), var(--accent-secondary));
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .logo-text span {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        .status-pill {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 50px;
+            font-size: 0.85rem;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        .status-dot.online {
+            background: var(--success);
+        }
+
+        .status-dot.offline {
+            background: var(--error);
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+                transform: scale(1);
+            }
+
+            50% {
+                opacity: 0.6;
+                transform: scale(0.9);
+            }
+        }
+
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1.25rem;
+        }
+
+        .card {
+            background: var(--bg-card);
+            border-radius: var(--radius);
+            border: 1px solid var(--border);
+            padding: 1.5rem;
+            transition: all 0.3s ease;
+        }
+
+        .card:hover {
+            border-color: var(--border-light);
+            box-shadow: var(--shadow-soft);
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.25rem;
+        }
+
+        .card-title {
+            font-size: 0.9rem;
+            font-weight: 500;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .card-icon {
+            font-size: 1.1rem;
+        }
+
+        .stat-card {
+            grid-column: span 1;
+        }
+
+        .stat-value {
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            line-height: 1.2;
+        }
+
+        .stat-label {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-top: 0.25rem;
+        }
+
+        .stat-change {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            padding: 0.25rem 0.5rem;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            margin-top: 0.75rem;
+        }
+
+        .stat-change.positive {
+            background: var(--success-soft);
+            color: var(--success);
+        }
+
+        .stat-change.negative {
+            background: var(--error-soft);
+            color: var(--error);
+        }
+
+        .wide-card {
+            grid-column: span 2;
+        }
+
+        .tall-card {
+            grid-row: span 2;
+        }
+
+        .mood-section {
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+            padding: 1rem;
+            background: var(--bg-secondary);
+            border-radius: var(--radius-sm);
+        }
+
+        .mood-emoji {
+            font-size: 3rem;
+            line-height: 1;
+        }
+
+        .mood-details {
+            flex: 1;
+        }
+
+        .mood-name {
+            font-size: 1.25rem;
+            font-weight: 600;
+            text-transform: capitalize;
+            margin-bottom: 0.5rem;
+        }
+
+        .progress-bar {
+            height: 6px;
+            background: var(--bg-elevated);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--error), var(--warning), var(--success));
+            border-radius: 3px;
+            transition: width 0.5s ease;
+        }
+
+        .list-container {
+            max-height: 280px;
+            overflow-y: auto;
+        }
+
+        .list-container::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        .list-container::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .list-container::-webkit-scrollbar-thumb {
+            background: var(--border-light);
+            border-radius: 2px;
+        }
+
+        .list-item {
+            padding: 0.875rem;
+            background: var(--bg-secondary);
+            border-radius: var(--radius-sm);
+            margin-bottom: 0.5rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: background 0.2s;
+        }
+
+        .list-item:hover {
+            background: var(--bg-elevated);
+        }
+
+        .list-item-content {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .list-item-title {
+            font-size: 0.9rem;
+            font-weight: 500;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .list-item-meta {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-top: 0.25rem;
+        }
+
+        .badge {
+            padding: 0.25rem 0.625rem;
+            border-radius: 6px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .badge-preference {
+            background: rgba(59, 130, 246, 0.15);
+            color: #60a5fa;
+        }
+
+        .badge-fact {
+            background: var(--success-soft);
+            color: var(--success);
+        }
+
+        .badge-event {
+            background: var(--warning-soft);
+            color: var(--warning);
+        }
+
+        .badge-emotion {
+            background: rgba(236, 72, 153, 0.15);
+            color: #f472b6;
+        }
+
+        .badge-pending {
+            background: var(--warning-soft);
+            color: var(--warning);
+        }
+
+        .badge-executed {
+            background: var(--success-soft);
+            color: var(--success);
+        }
+
+        .triple-item {
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            font-size: 0.8rem;
+        }
+
+        .triple-subject {
+            color: var(--accent-secondary);
+        }
+
+        .triple-predicate {
+            color: var(--text-secondary);
+        }
+
+        .triple-object {
+            color: var(--success);
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 2rem;
+            color: var(--text-muted);
+        }
+
+        .empty-icon {
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+            opacity: 0.5;
+        }
+
+        .refresh-btn {
+            background: var(--accent-soft);
+            color: var(--accent-secondary);
+            border: none;
+            padding: 0.5rem 0.875rem;
+            border-radius: 8px;
+            font-size: 0.8rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .refresh-btn:hover {
+            background: var(--accent-primary);
+            color: white;
+        }
+
+        .profile-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.75rem;
+        }
+
+        .profile-item {
+            padding: 0.875rem;
+            background: var(--bg-secondary);
+            border-radius: var(--radius-sm);
+        }
+
+        .profile-label {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 0.25rem;
+        }
+
+        .profile-value {
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+
+        @media (max-width: 1200px) {
+            .dashboard-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .wide-card {
+                grid-column: span 2;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .app {
+                padding: 1rem;
+            }
+
+            .dashboard-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .wide-card {
+                grid-column: span 1;
+            }
+
+            .header {
+                flex-direction: column;
+                gap: 1rem;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useCallback } = React;
+
+        const API_BASE = window.location.origin;
+
+        const MOOD_EMOJIS = {
+            neutral: '😐', happy: '😊', sad: '😢',
+            concerned: '😟', proud: '😌', disappointed: '😔', excited: '🤩'
+        };
+
+        const fetchAPI = async (endpoint) => {
+            try {
+                const res = await fetch(`${API_BASE}${endpoint}`);
+                return await res.json();
+            } catch (e) {
+                console.error('API Error:', e);
+                return null;
+            }
+        };
+
+        const StatCard = ({ icon, value, label, change }) => (
+            <div className="card stat-card">
+                <div className="card-header">
+                    <span className="card-title">
+                        <span className="card-icon">{icon}</span>
+                        {label}
+                    </span>
+                </div>
+                <div className="stat-value">{value}</div>
+                {change && (
+                    <div className={`stat-change ${change >= 0 ? 'positive' : 'negative'}`}>
+                        {change >= 0 ? '↑' : '↓'} {Math.abs(change)}%
+                    </div>
+                )}
+            </div>
+        );
+
+        const MoodCard = ({ mood, satisfaction }) => (
+            <div className="card">
+                <div className="card-header">
+                    <span className="card-title">
+                        <span className="card-icon">🎭</span>
+                        Emotional State
+                    </span>
+                </div>
+                <div className="mood-section">
+                    <div className="mood-emoji">{MOOD_EMOJIS[mood] || '😐'}</div>
+                    <div className="mood-details">
+                        <div className="mood-name">{mood || 'Neutral'}</div>
+                        <div className="progress-bar">
+                            <div
+                                className="progress-fill"
+                                style={{ width: `${(satisfaction + 1) * 50}%` }}
+                            />
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
+                            Satisfaction: {satisfaction?.toFixed(2) || '0.00'}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+
+        const ListCard = ({ title, icon, items, renderItem, emptyText }) => (
+            <div className="card wide-card">
+                <div className="card-header">
+                    <span className="card-title">
+                        <span className="card-icon">{icon}</span>
+                        {title}
+                    </span>
+                </div>
+                <div className="list-container">
+                    {items && items.length > 0 ? (
+                        items.map((item, idx) => renderItem(item, idx))
+                    ) : (
+                        <div className="empty-state">
+                            <div className="empty-icon">📭</div>
+                            <div>{emptyText || 'No data yet'}</div>
+                        </div>
+                    )}
+                </div>
+            </div>
+        );
+
+        const ProfileCard = ({ profile }) => (
+            <div className="card">
+                <div className="card-header">
+                    <span className="card-title">
+                        <span className="card-icon">👤</span>
+                        Admin Profile
+                    </span>
+                </div>
+                <div className="profile-grid">
+                    <div className="profile-item">
+                        <div className="profile-label">Telegram Name</div>
+                        <div className="profile-value">{profile?.telegram_name || 'Unknown'}</div>
+                    </div>
+                    <div className="profile-item">
+                        <div className="profile-label">Full Name</div>
+                        <div className="profile-value">{profile?.full_name || 'Not set'}</div>
+                    </div>
+                </div>
+                {profile?.additional_info && (
+                    <div className="profile-item" style={{ marginTop: '0.75rem' }}>
+                        <div className="profile-label">Additional Info</div>
+                        <div className="profile-value">{profile.additional_info}</div>
+                    </div>
+                )}
+            </div>
+        );
+
+        const App = () => {
+            const [connected, setConnected] = useState(false);
+            const [stats, setStats] = useState({});
+            const [emotional, setEmotional] = useState({});
+            const [memories, setMemories] = useState([]);
+            const [schedules, setSchedules] = useState([]);
+            const [triples, setTriples] = useState([]);
+            const [profile, setProfile] = useState({});
+
+            const loadData = useCallback(async () => {
+                const [statsData, emotionalData, memoriesData, schedulesData, triplesData, profileData] =
+                    await Promise.all([
+                        fetchAPI('/api/stats'),
+                        fetchAPI('/api/emotional-state'),
+                        fetchAPI('/api/memories?limit=10'),
+                        fetchAPI('/api/schedules?limit=10'),
+                        fetchAPI('/api/triples?limit=10'),
+                        fetchAPI('/api/profile')
+                    ]);
+
+                if (statsData) setStats(statsData);
+                if (emotionalData) setEmotional(emotionalData);
+                if (memoriesData) setMemories(memoriesData);
+                if (schedulesData) setSchedules(schedulesData);
+                if (triplesData) setTriples(triplesData);
+                if (profileData) setProfile(profileData);
+            }, []);
+
+            useEffect(() => {
+                loadData();
+
+                const wsUrl = `${API_BASE.replace('http', 'ws')}/ws`;
+                const ws = new WebSocket(wsUrl);
+
+                ws.onopen = () => setConnected(true);
+                ws.onclose = () => {
+                    setConnected(false);
+                    setTimeout(() => window.location.reload(), 5000);
+                };
+                ws.onmessage = (e) => {
+                    const msg = JSON.parse(e.data);
+                    if (msg.type === 'memory_update' || msg.type === 'schedule_update') {
+                        loadData();
+                    }
+                };
+
+                const interval = setInterval(loadData, 30000);
+                return () => {
+                    clearInterval(interval);
+                    ws.close();
+                };
+            }, [loadData]);
+
+            return (
+                <div className="app">
+                    <header className="header">
+                        <div className="logo">
+                            <div className="logo-icon">🧠</div>
+                            <div className="logo-text">
+                                <h1>Vira Neural Dashboard</h1>
+                                <span>Personal Life OS Monitoring</span>
+                            </div>
+                        </div>
+                        <div className="status-pill">
+                            <div className={`status-dot ${connected ? 'online' : 'offline'}`} />
+                            <span>{connected ? 'Connected' : 'Reconnecting...'}</span>
+                        </div>
+                    </header>
+
+                    <div className="dashboard-grid">
+                        <StatCard
+                            icon="💾"
+                            value={stats.memories || 0}
+                            label="Memories"
+                        />
+                        <StatCard
+                            icon="🔗"
+                            value={stats.triples || 0}
+                            label="Knowledge"
+                        />
+                        <StatCard
+                            icon="📅"
+                            value={stats.pending_schedules || 0}
+                            label="Schedules"
+                        />
+                        <StatCard
+                            icon="📍"
+                            value={stats.entities || 0}
+                            label="Entities"
+                        />
+
+                        <MoodCard mood={emotional.mood} satisfaction={emotional.satisfaction} />
+                        <ProfileCard profile={profile} />
+
+                        <ListCard
+                            title="Recent Memories"
+                            icon="💭"
+                            items={memories}
+                            emptyText="No memories stored yet"
+                            renderItem={(m, idx) => (
+                                <div key={idx} className="list-item">
+                                    <div className="list-item-content">
+                                        <div className="list-item-title">{m.summary?.substring(0, 50)}...</div>
+                                        <div className="list-item-meta">{m.created_at || ''}</div>
+                                    </div>
+                                    <span className={`badge badge-${m.memory_type}`}>{m.memory_type}</span>
+                                </div>
+                            )}
+                        />
+
+                        <ListCard
+                            title="Upcoming Schedules"
+                            icon="⏰"
+                            items={schedules}
+                            emptyText="No upcoming schedules"
+                            renderItem={(s, idx) => (
+                                <div key={idx} className="list-item">
+                                    <div className="list-item-content">
+                                        <div className="list-item-title">{s.context?.substring(0, 40)}...</div>
+                                        <div className="list-item-meta">{s.scheduled_at}</div>
+                                    </div>
+                                    <span className={`badge badge-${s.status}`}>{s.status}</span>
+                                </div>
+                            )}
+                        />
+
+                        <ListCard
+                            title="Knowledge Graph"
+                            icon="🕸️"
+                            items={triples}
+                            emptyText="No knowledge triples yet"
+                            renderItem={(t, idx) => (
+                                <div key={idx} className="list-item triple-item">
+                                    <div>
+                                        <span className="triple-subject">{t.subject}</span>
+                                        <span className="triple-predicate"> → {t.predicate} → </span>
+                                        <span className="triple-object">{t.object}</span>
+                                    </div>
+                                    <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>
+                                        {(t.confidence * 100).toFixed(0)}%
+                                    </span>
+                                </div>
+                            )}
+                        />
+                    </div>
+                </div>
+            );
+        };
+
+        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+</body>
+
+</html>

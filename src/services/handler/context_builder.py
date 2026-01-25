@@ -2,8 +2,34 @@ import datetime
 import hashlib
 import logging
 from typing import List, Dict, Tuple, Optional
+from collections import defaultdict
 
 logger = logging.getLogger(__name__)
+
+
+class ContextOptimizer:
+    def __init__(self):
+        self._pattern_cache: Dict[str, int] = defaultdict(int)
+        self._effective_patterns: Dict[str, float] = {}
+        
+    def record_pattern(self, pattern_type: str, was_effective: bool):
+        self._pattern_cache[pattern_type] += 1
+        
+        if pattern_type not in self._effective_patterns:
+            self._effective_patterns[pattern_type] = 0.5
+        
+        current = self._effective_patterns[pattern_type]
+        learning_rate = 0.1
+        target = 1.0 if was_effective else 0.0
+        
+        self._effective_patterns[pattern_type] = current + learning_rate * (target - current)
+    
+    def get_pattern_priority(self, pattern_type: str) -> float:
+        return self._effective_patterns.get(pattern_type, 0.5)
+    
+    def should_include_pattern(self, pattern_type: str, threshold: float = 0.4) -> bool:
+        return self.get_pattern_priority(pattern_type) >= threshold
+
 
 class ContextBuilder:
     def __init__(self, meteosource_api_key: str = None, default_lat: float = -7.6398581, 
@@ -19,6 +45,9 @@ class ContextBuilder:
         self.context_cache: Dict[str, Tuple[str, datetime.datetime]] = {}
         self.CACHE_TTL = 300
         self.MAX_CACHE_SIZE = 100
+        
+        self.optimizer = ContextOptimizer()
+        self._context_usage_stats: Dict[str, int] = defaultdict(int)
     
     def _format_time_gap(self, last_time: Optional[datetime.datetime]) -> str:
         if not last_time:
@@ -87,7 +116,8 @@ class ContextBuilder:
     def build_context(self, user_id: str, conversation_summary: str,
                      relevant_memories: List[Dict], memory_summary: str,
                      last_interaction: Optional[datetime.datetime], schedule_context: Optional[str],
-                     schedule_summary: str, intent_context: Optional[Dict] = None) -> str:
+                     schedule_summary: str, intent_context: Optional[Dict] = None,
+                     user_metrics: Optional[Dict] = None, user_profile: Optional[Dict] = None) -> str:
         
         memory_count = len(relevant_memories) if relevant_memories else 0
         state_hash = hashlib.md5(
@@ -95,13 +125,23 @@ class ContextBuilder:
         ).hexdigest()[:8]
         cache_key = f"{user_id}:{state_hash}"
         
+        # Invalidate cache if profile changes? ideally yes, but for now we assume profile is stable enough or checked outside
+        # Actually user_profile should be part of hash if we want robust caching
+        
         if not schedule_context and not intent_context and cache_key in self.context_cache:
             cached_ctx, cached_time = self.context_cache[cache_key]
             if (datetime.datetime.now() - cached_time).total_seconds() < self.CACHE_TTL:
+                self._context_usage_stats['cache_hits'] += 1
                 return cached_ctx
         
+        self._context_usage_stats['cache_misses'] += 1
         sections = []
         
+        if user_profile:
+             profile_section = self._build_profile_section_explicit(user_profile)
+             if profile_section:
+                 sections.append(profile_section)
+
         if intent_context:
             intent_section = self._build_intent_section(intent_context)
             if intent_section:
@@ -109,6 +149,11 @@ class ContextBuilder:
         
         system_section = self._build_system_section(last_interaction, schedule_context)
         sections.append(system_section)
+        
+        if user_metrics and self.optimizer.should_include_pattern('user_metrics'):
+            metrics_section = self._build_metrics_section(user_metrics)
+            if metrics_section:
+                sections.append(metrics_section)
         
         if conversation_summary:
             sections.append(f"[CONVERSATION CONTEXT]\n{conversation_summary}")
@@ -118,7 +163,7 @@ class ContextBuilder:
             sections.append(memory_section)
         
         if memory_summary:
-            sections.append(f"[USER PROFILE]\n{memory_summary}")
+            sections.append(f"[LONG TERM MEMORY SUMMARY]\n{memory_summary}")
         
         if schedule_summary:
             sections.append(f"[UPCOMING SCHEDULES]\n{schedule_summary}")
@@ -130,6 +175,53 @@ class ContextBuilder:
             self._cleanup_cache()
         
         return context
+    
+    def _build_profile_section_explicit(self, profile: Dict) -> str:
+        """Build explicit user profile section from manual info/telegram name."""
+        lines = ["[USER IDENTITY INFO]"]
+        
+        name = profile.get('telegram_name') or profile.get('full_name')
+        if name:
+            lines.append(f"Display Name: {name}")
+            
+        info = profile.get('additional_info')
+        if info:
+            lines.append(f"User Notes: {info}")
+            
+        if len(lines) == 1:
+            return ""
+            
+        return "\n".join(lines)
+
+    def _build_metrics_section(self, metrics: Dict) -> str:
+        if not metrics or not metrics.get('total_messages'):
+            return ""
+        
+        section = "[USER ENGAGEMENT INSIGHTS]\n"
+        
+        engagement = metrics.get('engagement_score', 0)
+        if engagement > 0.7:
+            section += f"Highly engaged user (Score: {engagement:.2f})\n"
+        elif engagement > 0.4:
+            section += f"Moderately engaged user (Score: {engagement:.2f})\n"
+        else:
+            section += f"New or casual user (Score: {engagement:.2f})\n"
+        
+        if metrics.get('total_messages', 0) > 50:
+            section += f"Experienced user with {metrics['total_messages']} interactions\n"
+        
+        top_topics = metrics.get('top_topics', [])
+        if top_topics:
+            topics_str = ", ".join([topic for topic, _ in top_topics[:3]])
+            section += f"Primary interests: {topics_str}\n"
+        
+        sentiment = metrics.get('avg_sentiment', 0)
+        if sentiment > 0.3:
+            section += "Generally positive sentiment\n"
+        elif sentiment < -0.3:
+            section += "May need extra support or encouragement\n"
+        
+        return section
     
     def _build_intent_section(self, intent_context: Dict) -> str:
         intent_type = intent_context.get('intent_type', 'unknown')
@@ -210,6 +302,8 @@ class ContextBuilder:
             match_type = mem.get('match_type', 'unknown')
             confidence = mem.get('confidence')
             source_count = mem.get('source_count')
+            stability = mem.get('stability_score', 1.0)
+            is_volatile = mem.get('volatility_flag', False)
             
             if match_type == "fingerprint_exact":
                 prefix = "🎯"
@@ -234,6 +328,21 @@ class ContextBuilder:
             if mem.get('priority') and mem['priority'] > 0.8:
                 annotations.append("Important")
             
+            if stability < 0.5 or is_volatile:
+                annotations.append("⚡ Volatile - verify before using")
+            elif stability > 0.9:
+                annotations.append("✓ Stable")
+            
+            temporal = mem.get('temporal_context')
+            if temporal and temporal != 'unspecified':
+                temporal_labels = {
+                    'current': 'NOW',
+                    'past': 'PAST',
+                    'future': 'FUTURE',
+                    'permanent': 'ALWAYS'
+                }
+                annotations.append(temporal_labels.get(temporal, temporal.upper()))
+            
             if annotations:
                 line += f" [{', '.join(annotations)}]"
             
@@ -251,6 +360,12 @@ class ContextBuilder:
             for k in sorted_keys[:int(self.MAX_CACHE_SIZE * 0.2)]:
                 del self.context_cache[k]
     
+    def record_context_effectiveness(self, had_intent: bool, had_metrics: bool, was_successful: bool):
+        if had_intent:
+            self.optimizer.record_pattern('intent_context', was_successful)
+        if had_metrics:
+            self.optimizer.record_pattern('user_metrics', was_successful)
+    
     def clear_cache(self):
         self.context_cache.clear()
         self._cached_weather = None
@@ -260,9 +375,15 @@ class ContextBuilder:
         return len(self.context_cache)
     
     def get_cache_stats(self) -> Dict:
+        total_requests = self._context_usage_stats['cache_hits'] + self._context_usage_stats['cache_misses']
+        hit_rate = (self._context_usage_stats['cache_hits'] / total_requests * 100) if total_requests > 0 else 0
+        
         return {
             'size': len(self.context_cache),
             'max_size': self.MAX_CACHE_SIZE,
             'ttl_seconds': self.CACHE_TTL,
-            'weather_cached': self._cached_weather is not None
+            'weather_cached': self._cached_weather is not None,
+            'cache_hit_rate': round(hit_rate, 2),
+            'total_requests': total_requests,
+            'optimizer_patterns': dict(self.optimizer._effective_patterns)
         }

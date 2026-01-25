@@ -1,28 +1,31 @@
 import json
 import os
 import logging
-import threading
+import asyncio
 import time
 import datetime
 from collections import deque
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Callable
 
 import PIL.Image
 from google.genai import types
 
 logger = logging.getLogger(__name__)
 
+
 class SessionManager:
+    """Async-compatible session manager for chat history and metadata."""
+    
     def __init__(self, max_history: int = 40):
         self.sessions: Dict[str, deque] = {}
         self.meta_data: Dict[str, Dict[str, Any]] = {}
-        self.locks: Dict[str, threading.Lock] = {}
+        self._locks: Dict[str, asyncio.Lock] = {}
         
         self.MAX_HISTORY = max_history
         self.SESSION_DIR = "storage/sessions"
         self.IMG_PREFIX = ":::IMG_PATH:::"
         
-        self._cleanup_lock = threading.Lock()
+        self._cleanup_lock = asyncio.Lock()
         self._last_cleanup = time.time()
         
         self.CLEANUP_INTERVAL = 1800
@@ -32,32 +35,45 @@ class SessionManager:
         
         os.makedirs(self.SESSION_DIR, exist_ok=True)
     
-    def get_lock(self, user_id: str) -> threading.Lock:
-        if user_id not in self.locks:
-            self.locks[user_id] = threading.Lock()
-        return self.locks[user_id]
+    def _get_lock(self, user_id: str) -> asyncio.Lock:
+        """Get or create an async lock for a user."""
+        if user_id not in self._locks:
+            self._locks[user_id] = asyncio.Lock()
+        return self._locks[user_id]
+
+    # Backward compatibility - sync lock wrapper for non-critical operations
+    # For truly sync contexts that can't use async
+    _sync_locks: Dict[str, object] = {}
     
-    def cleanup_inactive_sessions(self):
+    def get_lock(self, user_id: str):
+        """Get a simple context manager for backward compatibility.
+        Note: For new code, prefer async patterns."""
+        import threading
+        if user_id not in SessionManager._sync_locks:
+            SessionManager._sync_locks[user_id] = threading.Lock()
+        return SessionManager._sync_locks[user_id]
+
+    async def cleanup_inactive_sessions(self):
+        """Clean up inactive sessions to free memory."""
         now = time.time()
         if now - self._last_cleanup < self.CLEANUP_INTERVAL:
             return
         
-        if not self._cleanup_lock.acquire(blocking=False):
+        if self._cleanup_lock.locked():
             return
         
-        try:
-            inactive_users = self._get_inactive_users()
-            for user_id in inactive_users:
-                self._save_and_unload(user_id)
+        async with self._cleanup_lock:
+            try:
+                inactive_users = self._get_inactive_users()
+                for user_id in inactive_users:
+                    await self._save_and_unload(user_id)
+                
+                self._last_cleanup = now
+                if inactive_users:
+                    logger.info(f"Unloaded {len(inactive_users)} sessions")
             
-            self._last_cleanup = now
-            if inactive_users:
-                logger.info(f"Unloaded {len(inactive_users)} sessions")
-        
-        except Exception as e:
-            logger.error(f"Cleanup error: {e}")
-        finally:
-            self._cleanup_lock.release()
+            except Exception as e:
+                logger.error(f"Cleanup error: {e}")
     
     def _get_inactive_users(self) -> List[str]:
         current_time = datetime.datetime.now()
@@ -70,15 +86,18 @@ class SessionManager:
         
         return inactive_users
     
-    def _save_and_unload(self, user_id: str):
-        with self.get_lock(user_id):
+    async def _save_and_unload(self, user_id: str):
+        """Save session to disk and unload from memory."""
+        lock = self._get_lock(user_id)
+        async with lock:
             if user_id in self.sessions:
-                self._save_session_to_disk(user_id)
+                await asyncio.to_thread(self._save_session_to_disk_sync, user_id)
                 self.sessions.pop(user_id, None)
                 self.meta_data.pop(user_id, None)
-                self.locks.pop(user_id, None)
+                self._locks.pop(user_id, None)
 
     def get_session(self, user_id: str) -> deque:
+        """Get session history for a user (sync, loads from disk if needed)."""
         if user_id not in self.sessions:
             self._load_session(user_id)
         return self.sessions.get(user_id, deque())
@@ -200,7 +219,8 @@ class SessionManager:
             "last_interaction": None
         }
 
-    def _save_session_to_disk(self, user_id: str):
+    def _save_session_to_disk_sync(self, user_id: str):
+        """Synchronous version of disk save - called via asyncio.to_thread."""
         try:
             meta = self.meta_data.get(user_id, {})
             last_int = meta.get("last_interaction")
@@ -219,6 +239,11 @@ class SessionManager:
         
         except Exception as e:
             logger.error(f"Save error for {user_id}: {e}")
+
+    # Alias for backward compatibility
+    def _save_session_to_disk(self, user_id: str):
+        """Save session to disk (sync). Alias for _save_session_to_disk_sync."""
+        self._save_session_to_disk_sync(user_id)
     
     def _atomic_write(self, path: str, data: Dict):
         tmp_path = f"{path}.tmp"

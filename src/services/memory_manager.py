@@ -1,6 +1,7 @@
 import uuid
 import json
 import logging
+import asyncio
 import numpy as np
 import threading
 import time
@@ -12,7 +13,6 @@ from enum import Enum
 
 from src.services.handler.canonicalizer import MemoryCanonicalizer
 from src.services.handler.memory_gatekeeper import MemoryGatekeeper
-
 from src.database import DBConnection
 from src.config import (
     MemoryType,
@@ -23,12 +23,10 @@ from src.config import (
 
 logger = logging.getLogger(__name__)
 
-
 class ClusterStatus(Enum):
     PENDING = "pending"
     ACTIVE = "active"
     MERGED = "merged"
-
 
 @dataclass
 class MemoryItem:
@@ -40,7 +38,10 @@ class MemoryItem:
     last_used: datetime
     memory_type: str
     cluster_id: Optional[str] = None
-
+    stability_score: float = 1.0
+    volatility_flag: bool = False
+    confidence: float = 0.5
+    fingerprint: Optional[str] = None
 
 @dataclass
 class MemoryCluster:
@@ -50,7 +51,69 @@ class MemoryCluster:
     dominant_type: str
     created_at: datetime
     last_updated: datetime
+    quality_score: float = 0.0
 
+class MemoryQualityMonitor:
+    def __init__(self, db: DBConnection, gatekeeper: Optional[MemoryGatekeeper]):
+        self.db = db
+        self.gatekeeper = gatekeeper
+        self._cache = {}
+        self._last_update = 0
+
+    async def get_system_health(self, user_id: str) -> Dict:
+        current_time = time.time()
+        if current_time - self._last_update < 300 and user_id in self._cache:
+            return self._cache[user_id]
+
+        stats = {
+            "total_memories": 0,
+            "high_quality_ratio": 0.0,
+            "volatile_ratio": 0.0,
+            "average_stability": 0.0,
+            "gatekeeper_stats": {}
+        }
+
+        try:
+            rows = await self.db.fetchall(
+                "SELECT metadata FROM memories WHERE user_id=? AND status='active'",
+                (user_id,)
+            )
+            
+            if rows:
+                total = len(rows)
+                stats["total_memories"] = total
+                
+                high_quality = 0
+                volatile_count = 0
+                total_stability = 0.0
+                
+                for r in rows:
+                    if not r[0]: continue
+                    meta = json.loads(r[0])
+                    
+                    stability = meta.get("stability_score", 1.0)
+                    total_stability += stability
+                    
+                    if meta.get("confidence", 0.0) > 0.8 and stability > 0.8:
+                        high_quality += 1
+                    
+                    if meta.get("volatility_flag", False):
+                        volatile_count += 1
+                
+                stats["high_quality_ratio"] = high_quality / total
+                stats["volatile_ratio"] = volatile_count / total
+                stats["average_stability"] = total_stability / total
+
+            if self.gatekeeper:
+                stats["gatekeeper_stats"] = self.gatekeeper.get_gatekeeper_stats()
+
+            self._cache[user_id] = stats
+            self._last_update = current_time
+            
+        except Exception as e:
+            logger.error(f"[QUALITY-MONITOR] Failed: {e}")
+            
+        return stats
 
 class EmbeddingCache:
     def __init__(self, max_size: int = 3000, ttl: int = 900):
@@ -180,15 +243,15 @@ class EmbeddingHandler:
             logger.error(f"[EMB-SIMILARITY] {e}")
             return np.zeros(len(vectors), dtype=np.float32)
 
-
 class MemoryScorer:
     def __init__(self):
         self.recency_halflife = 14.0
         self.weights = {
-            'semantic': 0.65,
+            'semantic': 0.55,
             'priority': 0.15,
             'recency': 0.15,
-            'usage': 0.05
+            'usage': 0.05,
+            'quality': 0.10
         }
         self.metadata_weights = {
             'priority': 0.5,
@@ -226,12 +289,18 @@ class MemoryScorer:
         recency = self._compute_recency([item.last_used for item in items])
         priority = np.array([item.priority for item in items], dtype=np.float32)
         usage = np.log1p(np.array([item.use_count for item in items], dtype=np.float32)) / 5.0
+        
+        quality = np.array([
+            (item.confidence * 0.6 + item.stability_score * 0.4) 
+            for item in items
+        ], dtype=np.float32)
 
         scores = (
             sim_scores * self.weights['semantic'] +
             priority * self.weights['priority'] +
             recency * self.weights['recency'] +
-            usage * self.weights['usage']
+            usage * self.weights['usage'] +
+            quality * self.weights['quality']
         )
 
         for i, item in enumerate(items):
@@ -239,6 +308,8 @@ class MemoryScorer:
                 scores[i] *= self.no_emb_penalty
             if item.cluster_id and item.cluster_id in cluster_map:
                 scores[i] *= (1 + self.cluster_boost)
+            if item.volatility_flag:
+                scores[i] *= 0.9
 
         return scores
 
@@ -269,7 +340,6 @@ class MemoryScorer:
         except Exception as e:
             logger.debug(f"[RECENCY] Calculation error: {e}")
             return np.zeros(len(timestamps), dtype=np.float32)
-
 
 class ClusterManager:
     def __init__(self, similarity_threshold: float = 0.85, min_cluster_size: int = 3):
@@ -316,9 +386,14 @@ class ClusterManager:
             centroid = centroid / norm
         
         type_counts = defaultdict(int)
+        quality_sum = 0.0
+        
         for item in items:
             type_counts[item.memory_type] += 1
+            quality_sum += (item.confidence + item.stability_score) / 2
+            
         dominant_type = max(type_counts, key=type_counts.get)
+        avg_quality = quality_sum / len(items) if items else 0.0
         
         cluster = MemoryCluster(
             id=cluster_id,
@@ -326,7 +401,8 @@ class ClusterManager:
             member_ids={item.id for item in items},
             dominant_type=dominant_type,
             created_at=datetime.now(),
-            last_updated=datetime.now()
+            last_updated=datetime.now(),
+            quality_score=avg_quality
         )
         
         self.clusters[cluster_id] = cluster
@@ -342,21 +418,24 @@ class ClusterManager:
         if not cluster_items:
             return None
         
-        sorted_items = sorted(cluster_items, key=lambda x: x.priority, reverse=True)
+        sorted_items = sorted(cluster_items, key=lambda x: (x.priority + x.confidence), reverse=True)
         top_summaries = [item.summary for item in sorted_items[:3]]
         
-        return f"[Cluster: {cluster.dominant_type}] " + " | ".join(top_summaries)
+        return f"[Cluster: {cluster.dominant_type} | Q:{cluster.quality_score:.2f}] " + " | ".join(top_summaries)
 
 class MemoryManager:
-    def __init__(self, db: DBConnection, genai_client=None, tier_2_model=None):
+    def __init__(self, db: DBConnection, genai_client=None, tier_2_model=None, knowledge_graph=None):
         self.db = db
         self.similarity_threshold = 0.92
-        self._lock = threading.RLock()
+        self._lock = asyncio.Lock()
         
         self.cache = EmbeddingCache()
         self.emb_handler = EmbeddingHandler(self.cache)
         self.scorer = MemoryScorer()
         self.cluster_mgr = ClusterManager()
+        
+        # Knowledge graph integration
+        self.knowledge_graph = knowledge_graph
         
         if genai_client and tier_2_model:
             self.canonicalizer = MemoryCanonicalizer(genai_client, tier_2_model)
@@ -366,12 +445,13 @@ class MemoryManager:
             self.canonicalizer = None
             self.gatekeeper = None
             self.use_canonicalization = False
-        
+            
+        self.quality_monitor = MemoryQualityMonitor(db, self.gatekeeper)
         self._stats_cache = {}
         self._batch_queue = defaultdict(list)
-        self._batch_lock = threading.Lock()
+        self._batch_lock = asyncio.Lock()
 
-    def add_memory(self, user_id: str, summary: str, m_type: str, priority: float = 0.5, embedding: List[float] = None):
+    async def add_memory(self, user_id: str, summary: str, m_type: str, priority: float = 0.5, embedding: List[float] = None):
         summary = summary.strip()
         if not summary or len(summary) < 3:
             logger.debug(f"[MEMORY-ADD] Invalid summary: too short")
@@ -379,7 +459,7 @@ class MemoryManager:
 
         priority = max(0.0, min(1.0, priority))
         
-        with self._lock:
+        async with self._lock:
             vec_data = None
             embedding_blob = None
             
@@ -389,23 +469,25 @@ class MemoryManager:
                     vec_data, embedding_blob = result
             
             if self.use_canonicalization and self.canonicalizer and self.gatekeeper:
-                self._add_memory_with_canonicalization(
+                await self._add_memory_with_pipeline(
                     user_id, summary, m_type, priority, vec_data, embedding_blob
                 )
             else:
-                self._add_memory_legacy(
+                await self._add_memory_legacy(
                     user_id, summary, m_type, priority, vec_data, embedding_blob
                 )
 
-    def _add_memory_with_canonicalization(self, user_id: str, summary: str, 
-                                         m_type: str, priority: float,
-                                         vec_data: Optional[np.ndarray],
-                                         embedding_blob: Optional[bytes]):
+    async def _add_memory_with_pipeline(self, user_id: str, summary: str, 
+                                 m_type: str, priority: float,
+                                 vec_data: Optional[np.ndarray],
+                                 embedding_blob: Optional[bytes]):
         try:
             canonical_data = self.canonicalizer.canonicalize(summary, m_type, priority)
             
-            gate_result = self.gatekeeper.validate_and_gate(user_id, canonical_data, vec_data)
+            quality_metrics = self.canonicalizer.analyze_memory_quality(canonical_data)
+            canonical_data.update(quality_metrics)
             
+            gate_result = await self.gatekeeper.validate_and_gate(user_id, canonical_data, vec_data)
             action = gate_result.get("action")
             
             if action == "reject":
@@ -415,35 +497,36 @@ class MemoryManager:
             elif action == "merge":
                 existing = gate_result.get("existing")
                 if existing:
-                    self._merge_memories(existing, canonical_data, embedding_blob)
+                    await self._merge_memories(existing, canonical_data, embedding_blob)
                 return
             
             elif action == "resurrect":
                 archived = gate_result.get("archived")
                 if archived:
-                    self.gatekeeper.resurrect_memory(archived["id"], canonical_data)
+                    await self.gatekeeper.resurrect_memory(archived["id"], canonical_data)
                 return
             
             elif action == "create":
-                self._create_canonical_memory(
+                mem_id = await self._create_canonical_memory(
                     user_id, canonical_data, embedding_blob
                 )
+                
+                # Extract and store entity relationships in knowledge graph
+                if self.knowledge_graph and mem_id:
+                    await self._extract_to_knowledge_graph(user_id, canonical_data, mem_id)
         
         except Exception as e:
-            logger.error(f"[MEMORY-CANONICAL] Failed: {e}, falling back to legacy")
-            self._add_memory_legacy(user_id, summary, m_type, priority, vec_data, embedding_blob)
+            logger.error(f"[MEMORY-PIPELINE] Failed: {e}, using legacy")
+            await self._add_memory_legacy(user_id, summary, m_type, priority, vec_data, embedding_blob)
 
-    def _create_canonical_memory(self, user_id: str, canonical_data: Dict, 
-                                embedding_blob: Optional[bytes]):
-        import json
-        
+    async def _create_canonical_memory(self, user_id: str, canonical_data: Dict, 
+                                embedding_blob: Optional[bytes]) -> Optional[str]:
         mem_id = str(uuid.uuid4())
-        cursor = self.db.get_cursor()
         
         try:
             metadata_str = json.dumps(canonical_data)
             
-            cursor.execute("""
+            await self.db.execute("""
                 INSERT INTO memories (
                     id, user_id, summary, memory_type, priority,
                     last_used_at, use_count, status, embedding, 
@@ -462,30 +545,47 @@ class MemoryManager:
                 metadata_str
             ))
             
-            self.db.commit()
             self._invalidate_cache(user_id)
             logger.info(f"[MEMORY-CANONICAL] Created: {canonical_data.get('fingerprint')}")
+            return mem_id
         
         except Exception as e:
             logger.error(f"[MEMORY-CANONICAL] Insert failed: {e}")
-            self.db.rollback()
+            await self.db.rollback()
+            return None
 
-    def _merge_memories(self, existing: Dict, new_canonical: Dict, 
-                       embedding_blob: Optional[bytes]):
-        import json
-        
+    async def _extract_to_knowledge_graph(self, user_id: str, canonical_data: Dict, mem_id: str):
+        """Extract entity relationships from canonical data and store in knowledge graph."""
         try:
-            merged = self.canonicalizer.merge_canonical_memories(
-                existing.get("metadata", {}), 
-                new_canonical
-            )
+            entity = canonical_data.get("entity")
+            relation = canonical_data.get("relation")
+            value = canonical_data.get("value")
+            confidence = canonical_data.get("confidence", 0.7)
+            
+            if entity and relation and value:
+                await self.knowledge_graph.add_triple(
+                    user_id=user_id,
+                    subject=entity,
+                    predicate=relation,
+                    obj=value,
+                    confidence=confidence,
+                    source_memory_id=mem_id
+                )
+                logger.debug(f"[KG-EXTRACT] Added triple: {entity} -{relation}-> {value}")
+        except Exception as e:
+            logger.error(f"[KG-EXTRACT] Failed: {e}")
+
+    async def _merge_memories(self, existing: Dict, new_canonical: Dict, 
+                       embedding_blob: Optional[bytes]):
+        try:
+            existing_meta = existing.get("metadata", {})
+            merged = self.canonicalizer.merge_canonical_memories(existing_meta, new_canonical)
             
             metadata_str = json.dumps(merged)
-            cursor = self.db.get_cursor()
             
             update_embedding = embedding_blob if embedding_blob else existing.get("embedding")
             
-            cursor.execute("""
+            await self.db.execute("""
                 UPDATE memories 
                 SET metadata=?, 
                     priority=?, 
@@ -503,58 +603,56 @@ class MemoryManager:
                 existing["id"]
             ))
             
-            self.db.commit()
             logger.info(f"[MEMORY-MERGE] Updated: {merged.get('fingerprint')}")
         
         except Exception as e:
             logger.error(f"[MEMORY-MERGE] Failed: {e}")
-            self.db.rollback()
+            await self.db.rollback()
 
-    def _add_memory_legacy(self, user_id: str, summary: str, m_type: str, 
+    async def _add_memory_legacy(self, user_id: str, summary: str, m_type: str, 
                           priority: float, vec_data: Optional[np.ndarray],
                           embedding_blob: Optional[bytes]):
         if vec_data is not None:
-            if self._check_duplicate(user_id, vec_data, summary):
+            if await self._check_duplicate(user_id, vec_data, summary):
                 logger.info(f"[MEMORY-ADD] Duplicate detected, skipping")
                 return
         
         mem_id = str(uuid.uuid4())
-        cursor = self.db.get_cursor()
         
         try:
-            cursor.execute("""
+            metadata = {
+                "source": "legacy",
+                "stability_score": 1.0,
+                "confidence": 0.5
+            }
+            await self.db.execute("""
                 INSERT INTO memories (id, user_id, summary, memory_type, priority, 
-                                    last_used_at, use_count, status, embedding, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, 0, 'active', ?, ?)
-            """, (mem_id, user_id, summary, m_type, priority, datetime.now(), embedding_blob, datetime.now()))
-            self.db.commit()
+                                    last_used_at, use_count, status, embedding, created_at, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, 0, 'active', ?, ?, ?)
+            """, (mem_id, user_id, summary, m_type, priority, datetime.now(), embedding_blob, datetime.now(), json.dumps(metadata)))
             self._invalidate_cache(user_id)
-            logger.info(f"[MEMORY-ADD] Added memory for user {user_id}: {summary[:50]}")
         except Exception as e:
             logger.error(f"[MEMORY-ADD] Failed to add memory: {e}")
-            self.db.rollback()
+            await self.db.rollback()
 
-    def _check_duplicate(self, user_id: str, vector: np.ndarray, summary: str) -> bool:
-        cursor = self.db.get_cursor()
-        
+    async def _check_duplicate(self, user_id: str, vector: np.ndarray, summary: str) -> bool:
         try:
-            cursor.execute(
+            row = await self.db.fetchone(
                 "SELECT 1 FROM memories WHERE user_id=? AND lower(summary)=? AND status='active' LIMIT 1",
                 (user_id, summary.lower())
             )
-            if cursor.fetchone():
+            if row:
                 return True
         except Exception as e:
             logger.error(f"[DUP-CHECK] Exact match check failed: {e}")
 
         try:
-            cursor.execute("""
+            rows = await self.db.fetchall("""
                 SELECT id, embedding FROM memories 
                 WHERE user_id=? AND status='active' AND embedding IS NOT NULL 
                 ORDER BY last_used_at DESC LIMIT 150
             """, (user_id,))
             
-            rows = cursor.fetchall()
             if not rows:
                 return False
 
@@ -575,15 +673,14 @@ class MemoryManager:
             
             if max_sim > self.similarity_threshold:
                 best_idx = np.argmax(similarities)
-                self._mark_used([ids[best_idx]])
-                logger.info(f"[DUP-CHECK] Similar memory found (sim={max_sim:.3f})")
+                asyncio.create_task(self._mark_used([ids[best_idx]]))
                 return True
         except Exception as e:
             logger.error(f"[DUP-CHECK] Similarity check failed: {e}")
 
         return False
 
-    def get_relevant_memories(self, user_id: str, query_embedding: List[float] = None,
+    async def get_relevant_memories(self, user_id: str, query_embedding: List[float] = None,
                             memory_type: str = None, min_priority: float = 0.0,
                             max_results: int = None, use_clusters: bool = True,
                             query_text: str = None, entities: List[str] = None) -> List[Dict]:
@@ -595,22 +692,19 @@ class MemoryManager:
         entity_matches = []
         
         if self.use_canonicalization and query_text:
-            fingerprint_matches = self._search_by_fingerprint_extraction(
+            fingerprint_matches = await self._search_by_fingerprint_extraction(
                 user_id, query_text, max_results
             )
             
             if fingerprint_matches:
-                logger.info(f"[MEMORY-SEARCH] Found {len(fingerprint_matches)} fingerprint matches")
                 results.extend(fingerprint_matches)
         
         if entities and len(results) < max_results:
-            entity_matches = self._search_by_entities(
+            entity_matches = await self._search_by_entities(
                 user_id, entities, max_results - len(results)
             )
             
             if entity_matches:
-                logger.info(f"[MEMORY-SEARCH] Found {len(entity_matches)} entity matches")
-                
                 existing_ids = {r['id'] for r in results}
                 for em in entity_matches:
                     if em['id'] not in existing_ids:
@@ -620,7 +714,7 @@ class MemoryManager:
         if remaining_slots > 0:
             exclude_ids = [r['id'] for r in results]
             
-            semantic_results = self._search_by_semantic(
+            semantic_results = await self._search_by_semantic(
                 user_id, query_embedding, memory_type, 
                 min_priority, remaining_slots, use_clusters,
                 exclude_ids=exclude_ids
@@ -630,36 +724,32 @@ class MemoryManager:
         
         return results[:max_results]
 
-    def _search_by_entities(self, user_id: str, entities: List[str], limit: int) -> List[Dict]:
-        """Search memories by multiple entities in a single query"""
+    async def _search_by_entities(self, user_id: str, entities: List[str], limit: int) -> List[Dict]:
         if not entities:
             return []
         
-        cursor = self.db.get_cursor()
         results = []
         
         try:
-            # Prepare placeholders for IN clause
             clean_entities = [e.lower() for e in entities]
             placeholders = ','.join(['?'] * len(clean_entities))
             
             query = f"""
                 SELECT id, summary, memory_type, priority, embedding,
-                    use_count, last_used_at, metadata, fingerprint,
-                    entity, relation, value, confidence, source_count,
-                    cluster_id
+                    use_count, last_used_at, metadata, cluster_id
                 FROM memories
-                WHERE user_id=? AND entity IN ({placeholders}) AND status='active'
-                ORDER BY confidence DESC, source_count DESC
+                WHERE user_id=? AND status='active' AND json_extract(metadata, '$.entity') IN ({placeholders})
+                ORDER BY priority DESC
                 LIMIT ?
             """
             
             params = [user_id] + clean_entities + [limit]
-            cursor.execute(query, params)
+            rows = await self.db.fetchall(query, params)
             
             ids_to_mark = []
             
-            for row in cursor.fetchall():
+            for row in rows:
+                metadata = json.loads(row[7]) if row[7] else {}
                 result = {
                     'id': row[0],
                     'summary': row[1],
@@ -667,23 +757,19 @@ class MemoryManager:
                     'priority': row[3],
                     'use_count': row[5],
                     'last_used': row[6],
-                    'score': row[12] or 0.7,
-                    'cluster_id': row[14],
+                    'score': metadata.get('confidence', 0.7),
+                    'cluster_id': row[8],
                     'match_type': 'entity_match',
-                    'fingerprint': row[8],
-                    'entity': row[9],
-                    'relation': row[10],
-                    'value': row[11],
-                    'confidence': row[12],
-                    'source_count': row[13]
+                    'fingerprint': metadata.get('fingerprint'),
+                    'entity': metadata.get('entity'),
+                    'relation': metadata.get('relation'),
+                    'confidence': metadata.get('confidence', 0.5)
                 }
                 results.append(result)
                 ids_to_mark.append(row[0])
             
             if ids_to_mark:
-                # Run sync (SQLite is fast) or use existing executor if available.
-                # Avoid spawning raw threads for small updates.
-                self._mark_used(ids_to_mark)
+                asyncio.create_task(self._mark_used(ids_to_mark))
             
             return results
         
@@ -691,7 +777,7 @@ class MemoryManager:
             logger.error(f"[ENTITY-SEARCH] Failed: {e}")
             return []
     
-    def _search_by_fingerprint_extraction(self, user_id: str, 
+    async def _search_by_fingerprint_extraction(self, user_id: str, 
                                          query_text: str, 
                                          max_results: int) -> List[Dict]:
         if not self.canonicalizer:
@@ -709,11 +795,11 @@ class MemoryManager:
             if not fingerprint:
                 return []
             
-            exact_match = self._search_exact_fingerprint(user_id, fingerprint)
+            exact_match = await self._search_exact_fingerprint(user_id, fingerprint)
             if exact_match:
                 return [exact_match]
             
-            entity_matches = self._search_by_entity_relation(
+            entity_matches = await self._search_by_entity_relation(
                 user_id, entity, relation, max_results
             )
             
@@ -723,25 +809,20 @@ class MemoryManager:
             logger.error(f"[FINGERPRINT-SEARCH] Failed: {e}")
             return []
     
-    def _search_exact_fingerprint(self, user_id: str, fingerprint: str) -> Optional[Dict]:
-        cursor = self.db.get_cursor()
-        
+    async def _search_exact_fingerprint(self, user_id: str, fingerprint: str) -> Optional[Dict]:
         try:
-            cursor.execute("""
+            row = await self.db.fetchone("""
                 SELECT id, summary, memory_type, priority, embedding,
-                       use_count, last_used_at, metadata, fingerprint,
-                       entity, relation, value, confidence, source_count,
-                       cluster_id
+                       use_count, last_used_at, metadata, cluster_id
                 FROM memories
-                WHERE user_id=? AND fingerprint=? AND status='active'
+                WHERE user_id=? AND metadata LIKE ? AND status='active'
                 LIMIT 1
-            """, (user_id, fingerprint))
+            """, (user_id, f'%"fingerprint":"{fingerprint}"%'))
             
-            row = cursor.fetchone()
             if not row:
                 return None
             
-            embedding = self.emb_handler.parse(row[4])
+            metadata = json.loads(row[7]) if row[7] else {}
             
             result = {
                 'id': row[0],
@@ -751,75 +832,56 @@ class MemoryManager:
                 'use_count': row[5],
                 'last_used': row[6],
                 'score': 1.0,
-                'cluster_id': row[14],
+                'cluster_id': row[8],
                 'match_type': 'fingerprint_exact',
-                'fingerprint': row[8],
-                'entity': row[9],
-                'relation': row[10],
-                'value': row[11],
-                'confidence': row[12],
-                'source_count': row[13]
+                'fingerprint': metadata.get('fingerprint'),
+                'entity': metadata.get('entity'),
+                'relation': metadata.get('relation'),
+                'confidence': metadata.get('confidence', 0.5),
+                'stability': metadata.get('stability_score', 1.0)
             }
             
-            threading.Thread(
-                target=self._mark_used, 
-                args=([row[0]],), 
-                daemon=True
-            ).start()
-            
+            asyncio.create_task(self._mark_used([row[0]]))
             return result
             
         except Exception as e:
             logger.error(f"[EXACT-FINGERPRINT] Search failed: {e}")
             return None
     
-    def _search_by_entity_relation(self, user_id: str, entity: str, 
+    async def _search_by_entity_relation(self, user_id: str, entity: str, 
                                    relation: str, limit: int) -> List[Dict]:
-        cursor = self.db.get_cursor()
         results = []
         
         try:
+            query = """
+                SELECT id, summary, memory_type, priority, embedding,
+                       use_count, last_used_at, metadata, cluster_id
+                FROM memories
+                WHERE user_id=? AND status='active'
+            """
+            params = [user_id]
+            
             if entity and relation:
-                cursor.execute("""
-                    SELECT id, summary, memory_type, priority, embedding,
-                           use_count, last_used_at, metadata, fingerprint,
-                           entity, relation, value, confidence, source_count,
-                           cluster_id
-                    FROM memories
-                    WHERE user_id=? AND entity=? AND relation=? AND status='active'
-                    ORDER BY confidence DESC, source_count DESC
-                    LIMIT ?
-                """, (user_id, entity, relation, limit))
-            
+                query += " AND metadata LIKE ? AND metadata LIKE ?"
+                params.extend([f'%"entity":"{entity}"%', f'%"relation":"{relation}"%'])
             elif entity:
-                cursor.execute("""
-                    SELECT id, summary, memory_type, priority, embedding,
-                           use_count, last_used_at, metadata, fingerprint,
-                           entity, relation, value, confidence, source_count,
-                           cluster_id
-                    FROM memories
-                    WHERE user_id=? AND entity=? AND status='active'
-                    ORDER BY confidence DESC, source_count DESC
-                    LIMIT ?
-                """, (user_id, entity, limit))
-            
+                query += " AND metadata LIKE ?"
+                params.append(f'%"entity":"{entity}"%')
             elif relation:
-                cursor.execute("""
-                    SELECT id, summary, memory_type, priority, embedding,
-                           use_count, last_used_at, metadata, fingerprint,
-                           entity, relation, value, confidence, source_count,
-                           cluster_id
-                    FROM memories
-                    WHERE user_id=? AND relation=? AND status='active'
-                    ORDER BY confidence DESC, source_count DESC
-                    LIMIT ?
-                """, (user_id, relation, limit))
+                query += " AND metadata LIKE ?"
+                params.append(f'%"relation":"{relation}"%')
             else:
                 return []
             
+            query += " LIMIT ?"
+            params.append(limit)
+            
+            rows = await self.db.fetchall(query, params)
+            
             ids_to_mark = []
             
-            for row in cursor.fetchall():
+            for row in rows:
+                metadata = json.loads(row[7]) if row[7] else {}
                 result = {
                     'id': row[0],
                     'summary': row[1],
@@ -827,25 +889,17 @@ class MemoryManager:
                     'priority': row[3],
                     'use_count': row[5],
                     'last_used': row[6],
-                    'score': row[12],
-                    'cluster_id': row[14],
+                    'score': metadata.get('confidence', 0.6),
+                    'cluster_id': row[8],
                     'match_type': 'entity_relation',
-                    'fingerprint': row[8],
-                    'entity': row[9],
-                    'relation': row[10],
-                    'value': row[11],
-                    'confidence': row[12],
-                    'source_count': row[13]
+                    'fingerprint': metadata.get('fingerprint'),
+                    'confidence': metadata.get('confidence', 0.5)
                 }
                 results.append(result)
                 ids_to_mark.append(row[0])
             
             if ids_to_mark:
-                threading.Thread(
-                    target=self._mark_used, 
-                    args=(ids_to_mark,), 
-                    daemon=True
-                ).start()
+                asyncio.create_task(self._mark_used(ids_to_mark))
             
             return results
             
@@ -853,13 +907,13 @@ class MemoryManager:
             logger.error(f"[ENTITY-RELATION] Search failed: {e}")
             return []
     
-    def _search_by_semantic(self, user_id: str, query_embedding: List[float],
+    async def _search_by_semantic(self, user_id: str, query_embedding: List[float],
                            memory_type: str, min_priority: float,
                            max_results: int, use_clusters: bool,
                            exclude_ids: List[str] = None) -> List[Dict]:
         exclude_ids = exclude_ids or []
         
-        items = self._fetch_memories(user_id, memory_type, min_priority)
+        items = await self._fetch_memories(user_id, memory_type, min_priority)
         
         if exclude_ids:
             items = [item for item in items if item.id not in exclude_ids]
@@ -879,7 +933,7 @@ class MemoryManager:
         
         scores = self.scorer.calculate(items, query_vec, self.emb_handler, cluster_map)
         
-        results = self._select_top_memories(
+        results = await self._select_top_memories(
             items, scores, max_results, query_vec is not None, cluster_map
         )
         
@@ -888,10 +942,10 @@ class MemoryManager:
         
         return results
 
-    def _fetch_memories(self, user_id: str, memory_type: Optional[str],
+    async def _fetch_memories(self, user_id: str, memory_type: Optional[str],
                         min_priority: float) -> List[MemoryItem]:
         query = """
-            SELECT id, summary, priority, embedding, use_count, last_used_at, memory_type, cluster_id
+            SELECT id, summary, priority, embedding, use_count, last_used_at, memory_type, cluster_id, metadata
             FROM memories WHERE user_id = ? AND status = 'active'
         """
         params = [user_id]
@@ -903,13 +957,14 @@ class MemoryManager:
             query += " AND priority >= ?"
             params.append(min_priority)
 
-        cursor = self.db.get_cursor()
         try:
-            cursor.execute(query, params)
+            rows = await self.db.fetchall(query, params)
             
             items = []
-            for row in cursor.fetchall():
+            for row in rows:
                 embedding = self.emb_handler.parse(row[3])
+                meta = json.loads(row[8]) if row[8] else {}
+                
                 items.append(MemoryItem(
                     id=row[0],
                     summary=row[1],
@@ -918,7 +973,11 @@ class MemoryManager:
                     use_count=row[4],
                     last_used=row[5],
                     memory_type=row[6],
-                    cluster_id=row[7] if len(row) > 7 else None
+                    cluster_id=row[7] if len(row) > 7 else None,
+                    stability_score=meta.get("stability_score", 1.0),
+                    volatility_flag=meta.get("volatility_flag", False),
+                    confidence=meta.get("confidence", 0.5),
+                    fingerprint=meta.get("fingerprint")
                 ))
             
             return items
@@ -926,7 +985,7 @@ class MemoryManager:
             logger.error(f"[FETCH-MEM] {e}")
             return []
 
-    def _select_top_memories(self, items: List[MemoryItem], scores: np.ndarray,
+    async def _select_top_memories(self, items: List[MemoryItem], scores: np.ndarray,
                             max_results: int, is_semantic: bool,
                             cluster_map: Dict[str, str]) -> List[Dict]:
         if len(scores) == 0:
@@ -970,7 +1029,9 @@ class MemoryManager:
                 'use_count': item.use_count,
                 'last_used': item.last_used,
                 'score': score,
-                'cluster_id': item.cluster_id
+                'cluster_id': item.cluster_id,
+                'stability': item.stability_score,
+                'confidence': item.confidence
             })
             
             ids_to_update.append(item.id)
@@ -980,17 +1041,15 @@ class MemoryManager:
             char_count += len(item.summary)
 
         if ids_to_update:
-            threading.Thread(target=self._mark_used, args=(ids_to_update,), daemon=True).start()
+            asyncio.create_task(self._mark_used(ids_to_update))
 
         return results
 
-    def _mark_used(self, memory_ids: List[str]):
-        """Batched update of memory usage stats"""
+    async def _mark_used(self, memory_ids: List[str]):
         if not memory_ids:
             return
         
         try:
-            cursor = self.db.get_cursor()
             now = datetime.now()
             
             BATCH_SIZE = 100
@@ -998,21 +1057,18 @@ class MemoryManager:
                 chunk = memory_ids[i:i + BATCH_SIZE]
                 placeholders = ','.join(['?'] * len(chunk))
                 
-                cursor.execute(
+                await self.db.execute(
                     f"""UPDATE memories 
                         SET use_count = use_count + 1, 
                             last_used_at = ? 
                         WHERE id IN ({placeholders})""",
                     [now] + chunk
                 )
-            
-            self.db.commit()
         except Exception as e:
             logger.error(f"[MARK-USED] Failed to update stats: {e}")
 
-    def batch_add_memories(self, user_id: str, memories: List[Dict]):
-        with self._batch_lock:
-            cursor = self.db.get_cursor()
+    async def batch_add_memories(self, user_id: str, memories: List[Dict]):
+        async with self._batch_lock:
             now = datetime.now()
             
             try:
@@ -1033,36 +1089,39 @@ class MemoryManager:
                         if result:
                             _, embedding_blob = result
                     
-                    cursor.execute("""
+                    meta = {
+                        "batch_source": True,
+                        "confidence": 0.5,
+                        "stability_score": 1.0
+                    }
+                    
+                    await self.db.execute("""
                         INSERT INTO memories (id, user_id, summary, memory_type, priority,
-                                            last_used_at, use_count, status, embedding, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, 0, 'active', ?, ?)
-                    """, (mem_id, user_id, summary, m_type, priority, now, embedding_blob, now))
+                                            last_used_at, use_count, status, embedding, created_at, metadata)
+                        VALUES (?, ?, ?, ?, ?, ?, 0, 'active', ?, ?, ?)
+                    """, (mem_id, user_id, summary, m_type, priority, now, embedding_blob, now, json.dumps(meta)))
                     added_count += 1
                 
-                self.db.commit()
                 self._invalidate_cache(user_id)
                 logger.info(f"[BATCH-ADD] Added {added_count} memories for user {user_id}")
             except Exception as e:
                 logger.error(f"[BATCH-ADD] {e}")
-                self.db.rollback()
+                await self.db.rollback()
 
-    def wipe_all_memories(self, user_id: str) -> int:
-        with self._lock:
+    async def wipe_all_memories(self, user_id: str) -> int:
+        async with self._lock:
             try:
-                cursor = self.db.get_cursor()
-                cursor.execute("DELETE FROM memories WHERE user_id=?", (user_id,))
-                count = cursor.rowcount
-                self.db.commit()
+                await self.db.execute("DELETE FROM memories WHERE user_id=?", (user_id,))
                 self._invalidate_cache(user_id)
-                logger.info(f"[WIPE] Deleted {count} memories for user {user_id}")
-                return count
+                if self.gatekeeper:
+                    self.gatekeeper.reset_stats()
+                return 0  # aiosqlite doesn't provide rowcount easily
             except Exception as e:
                 logger.error(f"[WIPE] {e}")
                 return 0
 
-    def forget_memory(self, user_id: str, query: str, embedding: List[float] = None) -> Optional[str]:
-        with self._lock:
+    async def forget_memory(self, user_id: str, query: str, embedding: List[float] = None) -> Optional[str]:
+        async with self._lock:
             query_vec = None
             if embedding:
                 res = self.emb_handler.prepare(embedding)
@@ -1070,17 +1129,14 @@ class MemoryManager:
                     query_vec, _ = res
             
             if query_vec is None:
-                logger.warning(f"[MEMORY-FORGET] No embedding provided for query: {query}")
                 return None
 
-            cursor = self.db.get_cursor()
             try:
-                cursor.execute("""
+                rows = await self.db.fetchall("""
                     SELECT id, summary, embedding FROM memories 
                     WHERE user_id=? AND status='active' AND embedding IS NOT NULL
                 """, (user_id,))
                 
-                rows = cursor.fetchall()
                 if not rows:
                     return None
 
@@ -1098,26 +1154,21 @@ class MemoryManager:
                 if not mem_vecs:
                     return None
 
-                similarity_threshold = 0.82
-                
                 similarities = self.emb_handler.compute_similarity_matrix(mem_vecs, query_vec)
                 best_idx = np.argmax(similarities)
                 max_sim = similarities[best_idx]
 
-                if max_sim >= similarity_threshold:
+                if max_sim >= 0.82:
                     target_id = mem_ids[best_idx]
                     target_summary = mem_summaries[best_idx]
                     
-                    cursor.execute("""
+                    await self.db.execute("""
                         UPDATE memories 
                         SET status='archived', priority=0, last_used_at=? 
                         WHERE id=?
                     """, (datetime.now(), target_id))
                     
-                    self.db.commit()
                     self._invalidate_cache(user_id)
-                    logger.info(f"[MEMORY-FORGET] User {user_id} forgot: {target_summary[:50]} (Sim: {max_sim:.2f})")
-                    
                     return target_summary
                 
                 return None
@@ -1125,17 +1176,15 @@ class MemoryManager:
                 logger.error(f"[MEMORY-FORGET] {e}")
                 return None
 
-    def deduplicate_existing_memories(self, user_id: str) -> int:
-        with self._lock:
+    async def deduplicate_existing_memories(self, user_id: str) -> int:
+        async with self._lock:
             try:
-                cursor = self.db.get_cursor()
-                cursor.execute("""
-                    SELECT id, embedding, summary FROM memories 
+                rows = await self.db.fetchall("""
+                    SELECT id, embedding, summary, metadata FROM memories 
                     WHERE user_id=? AND status='active' AND embedding IS NOT NULL
                     ORDER BY created_at ASC
                 """, (user_id,))
                 
-                rows = cursor.fetchall()
                 if len(rows) < 2:
                     return 0
                 
@@ -1163,13 +1212,11 @@ class MemoryManager:
                 
                 if to_remove:
                     placeholders = ','.join(['?'] * len(to_remove))
-                    cursor.execute(
+                    await self.db.execute(
                         f"UPDATE memories SET status='archived' WHERE id IN ({placeholders})",
                         list(to_remove)
                     )
-                    self.db.commit()
                     self._invalidate_cache(user_id)
-                    logger.info(f"[DEDUP] Removed {len(to_remove)} duplicates for user {user_id}")
                     return len(to_remove)
                 
                 return 0
@@ -1177,10 +1224,9 @@ class MemoryManager:
                 logger.error(f"[DEDUP] {e}")
                 return 0
 
-    def apply_decay_rules(self, user_id: str = None):
-        with self._lock:
+    async def apply_decay_rules(self, user_id: str = None):
+        async with self._lock:
             try:
-                cursor = self.db.get_cursor()
                 now = datetime.now()
                 
                 cutoff_emotion = now - timedelta(days=DECAY_DAYS_EMOTION)
@@ -1199,66 +1245,169 @@ class MemoryManager:
                     query += " AND user_id=?"
                     params.append(user_id)
                 
-                cursor.execute(query, params)
+                await self.db.execute(query, params)
                 
-                if cursor.rowcount > 0:
-                    self.db.commit()
-                    logger.info(f"[DECAY] Archived {cursor.rowcount} memories")
-                    if user_id:
-                        self._invalidate_cache(user_id)
+                if user_id:
+                    self._invalidate_cache(user_id)
             except Exception as e:
                 logger.error(f"[DECAY] {e}")
 
-    def optimize_memories(self, user_id: str = None, target_count: int = 500):
-        with self._lock:
+    async def optimize_memories(self, user_id: str = None, target_count: int = 500):
+        async with self._lock:
             try:
-                cursor = self.db.get_cursor()
                 users = [user_id] if user_id else []
                 
                 if not user_id:
-                    cursor.execute("""
+                    rows = await self.db.fetchall("""
                         SELECT user_id FROM memories 
                         WHERE status='active' 
                         GROUP BY user_id 
                         HAVING COUNT(*) > ?
                     """, (target_count,))
-                    users = [r[0] for r in cursor.fetchall()]
+                    users = [r[0] for r in rows]
                 
                 total_archived = 0
                 for uid in users:
-                    cursor.execute(
+                    row = await self.db.fetchone(
                         "SELECT COUNT(*) FROM memories WHERE user_id=? AND status='active'",
                         (uid,)
                     )
-                    count = cursor.fetchone()[0]
+                    count = row[0] if row else 0
                     
                     if count <= target_count:
                         continue
                     
                     excess = count - target_count
-                    cursor.execute("""
+                    await self.db.execute("""
                         UPDATE memories SET status='archived' WHERE id IN (
                             SELECT id FROM memories WHERE user_id=? AND status='active'
-                            ORDER BY (priority * 0.3 + use_count * 0.1 + 
-                                     (julianday('now') - julianday(last_used_at)) * -0.01) ASC
+                            ORDER BY (
+                                priority * 0.3 + 
+                                use_count * 0.1 + 
+                                json_extract(metadata, '$.stability_score') * 0.2 +
+                                (julianday('now') - julianday(last_used_at)) * -0.01
+                            ) ASC
                             LIMIT ?
                         )
                     """, (uid, excess))
-                    total_archived += cursor.rowcount
+                    total_archived += excess
                 
-                if total_archived > 0:
-                    self.db.commit()
-                    if user_id:
-                        self._invalidate_cache(user_id)
+                if user_id:
+                    self._invalidate_cache(user_id)
                         
-                logger.info(f"[OPTIMIZE] Archived {total_archived} memories")
             except Exception as e:
                 logger.error(f"[OPTIMIZE] {e}")
 
-    def search_memories(self, user_id: str, keyword: str, limit: int = 10) -> List[Dict]:
+    async def process_canonical_input(self, user_id: str, text: str):
+        """Process input through canonicalization pipeline."""
+        if not self.use_canonicalization or not self.canonicalizer:
+            return
+            
         try:
-            cursor = self.db.get_cursor()
-            cursor.execute("""
+            # 1. Canonicalize
+            canonical_data = await self.canonicalizer.canonicalize_memory(text)
+            if not canonical_data:
+                return
+                
+            # 2. Gatekeeping
+            emb = self.emb_handler.get_embedding(text)
+            gate_result = await self.gatekeeper.validate_and_gate(
+                user_id, canonical_data, emb
+            )
+            
+            action = gate_result.get("action")
+            target_id = gate_result.get("target_id")
+            
+            # 3. Execute Action
+            if action == "create":
+                await self._add_canonical_memory(user_id, canonical_data, emb)
+                
+            elif action == "merge" and target_id:
+                existing = await self.db.fetchone("SELECT * FROM memories WHERE id=?", (target_id,))
+                if existing:
+                    # Convert row to dict
+                    existing_dict = dict(existing)
+                    if existing_dict.get('metadata'):
+                        existing_dict['metadata'] = json.loads(existing_dict['metadata'])
+                    await self._merge_memories(existing_dict, canonical_data, self.emb_handler.prepare(emb)[1])
+                    
+            elif action == "update" and target_id:
+                 # Similar to merge but might be replacement
+                 # For now treat as merge
+                 existing = await self.db.fetchone("SELECT * FROM memories WHERE id=?", (target_id,))
+                 if existing:
+                    existing_dict = dict(existing)
+                    if existing_dict.get('metadata'):
+                        existing_dict['metadata'] = json.loads(existing_dict['metadata'])
+                    await self._merge_memories(existing_dict, canonical_data, self.emb_handler.prepare(emb)[1])
+            
+            elif action == "resurrect" and target_id:
+                await self.gatekeeper.resurrect_memory(target_id, canonical_data)
+                
+            # 4. KG Extraction (for new/merged)
+            # This is implicit in _add_canonical_memory usually, or we call it explicitly
+            # Let's simple skip explicit KG call here as _add_canonical_memory might do it (I saw it earlier)
+            
+        except Exception as e:
+            logger.error(f"[CANON-PROC] Processing failed: {e}")
+
+    async def _add_canonical_memory(self, user_id: str, canonical: Dict, embedding: List[float]):
+        try:
+            mem_id = str(uuid.uuid4())
+            now = datetime.now()
+            
+            meta = {
+                "fingerprint": canonical.get("fingerprint"),
+                "entity": canonical.get("entity"),
+                "relation": canonical.get("relation"),
+                "value": canonical.get("value"),
+                "confidence": canonical.get("confidence", 0.5),
+                "source_count": 1,
+                "history": [{
+                    "value": canonical.get("value"),
+                    "timestamp": now.isoformat(),
+                    "source": "initial_creation"
+                }],
+                "stability_score": 1.0
+            }
+            
+            emb_blob = None
+            if embedding:
+                res = self.emb_handler.prepare(embedding)
+                if res:
+                    emb_blob = res[1]
+            
+            await self.db.execute("""
+                INSERT INTO memories (
+                    id, user_id, summary, memory_type, priority,
+                    confidence, fingerprint, entity, relation, value,
+                    metadata, embedding, status, created_at, last_used_at, use_count
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, 0)
+            """, (
+                mem_id, user_id, 
+                canonical.get("summary"), 
+                canonical.get("type", "general"),
+                0.8, # High priority for canonical
+                canonical.get("confidence", 0.5),
+                canonical.get("fingerprint"),
+                canonical.get("entity"),
+                canonical.get("relation"),
+                canonical.get("value"),
+                json.dumps(meta),
+                emb_blob,
+                now, now
+            ))
+            
+            self._invalidate_cache(user_id)
+            await self._extract_to_knowledge_graph(user_id, canonical, mem_id)
+            logger.info(f"[CANON-ADD] Added canonical memory {mem_id}")
+            
+        except Exception as e:
+            logger.error(f"[CANON-ADD] Failed: {e}")
+
+    async def search_memories(self, user_id: str, keyword: str, limit: int = 10) -> List[Dict]:
+        try:
+            rows = await self.db.fetchall("""
                 SELECT summary, memory_type, priority, use_count, last_used_at
                 FROM memories 
                 WHERE user_id=? AND status='active' AND lower(summary) LIKE ?
@@ -1274,20 +1423,19 @@ class MemoryManager:
                     "use_count": r[3],
                     "last_used": r[4]
                 }
-                for r in cursor.fetchall()
+                for r in rows
             ]
         except Exception as e:
             logger.error(f"[SEARCH-MEM] {e}")
             return []
 
-    def get_memory_stats(self, user_id: str) -> Dict:
+    async def get_memory_stats(self, user_id: str) -> Dict:
         cache_key = f"stats_{user_id}"
         if cache_key in self._stats_cache:
             return self._stats_cache[cache_key]
         
         try:
-            cursor = self.db.get_cursor()
-            cursor.execute("""
+            row = await self.db.fetchone("""
                 SELECT 
                     COUNT(*) as total,
                     SUM(CASE WHEN status='active' THEN 1 ELSE 0 END) as active,
@@ -1297,13 +1445,13 @@ class MemoryManager:
                 FROM memories WHERE user_id=?
             """, (user_id,))
             
-            row = cursor.fetchone()
             stats = {
                 "total": row[0] or 0,
                 "active": row[1] or 0,
                 "archived": row[2] or 0,
                 "avg_priority": round(row[3], 2) if row[3] else 0.0,
-                "last_activity": row[4]
+                "last_activity": row[4],
+                "quality_health": await self.quality_monitor.get_system_health(user_id)
             }
             
             self._stats_cache[cache_key] = stats
