@@ -19,12 +19,11 @@ from src.brainstem import (
     GOOGLE_API_KEY, CHAT_MODEL, TIER_1_MODEL, TIER_2_MODEL, TIER_3_MODEL,
     PERSONA_INSTRUCTION, CHAT_INTERACTION_ANALYSIS_INSTRUCTION,
     EXTRACTION_INSTRUCTION, MemoryType, API_ROTATOR, AllAPIExhaustedError,
-    OLLAMA_BASE_URL, EMBEDDING_MODEL
+    OLLAMA_BASE_URL, EMBEDDING_MODEL, NeuralEventBus
 )
 from src.hippocampus import Hippocampus, Memory
 from src.amygdala import Amygdala, PlanProgressState
 from src.thalamus import Thalamus
-
 
 class PlanStatus(str, Enum):
     PENDING = "pending"
@@ -136,18 +135,26 @@ class PrefrontalCortex:
             # Generate embedding for user message
             user_embedding = await self._generate_embedding(message)
 
+            await NeuralEventBus.set_activity("prefrontal_cortex", "Analyzing Intent")
             intent_data = await self._extract_intent(message)
+            
+            await NeuralEventBus.emit("prefrontal_cortex", "amygdala", "emotion_check")
             detected_emotion = self._amygdala.detect_emotion_from_text(message)
             self._amygdala.adjust_for_emotion(detected_emotion)
 
+            await NeuralEventBus.set_activity("prefrontal_cortex", "Retrieving Memories")
+            await NeuralEventBus.emit("prefrontal_cortex", "hippocampus", "memory_retrieval")
             memories = await self._retrieve_memories(message, intent_data)
 
             if self._active_plan:
+                await NeuralEventBus.set_activity("prefrontal_cortex", "Executing Plan")
                 plan_response = await self._handle_active_plan(message, intent_data)
                 if plan_response:
+                    await NeuralEventBus.clear_activity("prefrontal_cortex")
                     return plan_response
 
             if self._should_create_plan(message, intent_data):
+                await NeuralEventBus.set_activity("prefrontal_cortex", "Creating New Plan")
                 plan = await self.create_plan(message)
                 if plan:
                     self._amygdala.update_satisfaction(PlanProgressState.ON_TRACK)
@@ -155,20 +162,26 @@ class PrefrontalCortex:
             schedules = await self._hippocampus.get_upcoming_schedules(hours_ahead=24)
             schedule_context = self._format_schedules(schedules) if schedules else None
 
-            # Retrieve semantically relevant history (1-5 messages)
-            relevant_history = self._thalamus.get_relevant_history(user_embedding, top_k=5)
+            # Retrieve semantically relevant history via hybrid context
+            await NeuralEventBus.set_activity("prefrontal_cortex", "Building Context")
+            await NeuralEventBus.emit("prefrontal_cortex", "thalamus", "context_building")
+            
+            # Get long-term relevant history via async method
+            relevant_history = await self._thalamus.get_relevant_history_async(user_embedding, top_k=5)
             relevant_history_context = self._format_relevant_history(relevant_history)
 
             context = await self._thalamus.build_context(
                 relevant_memories=[asdict(m) for m in memories] if memories else [],
                 schedule_context=schedule_context,
-                intent_data=intent_data
+                intent_data=intent_data,
+                query_embedding=user_embedding  # Pass embedding for hybrid retrieval
             )
             
-            # Add relevant history to context
-            if relevant_history_context:
+            # Add relevant history to context if not already included
+            if relevant_history_context and "[RELEVANT PAST CONVERSATIONS]" not in context:
                 context = f"[RELEVANT PAST CONVERSATIONS]\n{relevant_history_context}\n\n{context}"
 
+            await NeuralEventBus.set_activity("prefrontal_cortex", "Generating Response")
             response = await self._generate_response_with_rotation(message, context, image_path)
 
             # Store both messages with embeddings
@@ -180,6 +193,9 @@ class PrefrontalCortex:
             )
 
             asyncio.create_task(self._post_process(message, response, intent_data))
+            
+            await NeuralEventBus.emit("prefrontal_cortex", "motor_cortex", "output_sent")
+            await NeuralEventBus.clear_activity("prefrontal_cortex")
 
             return response
 
@@ -311,6 +327,10 @@ class PrefrontalCortex:
             pass
         return None
 
+    async def generate_embedding(self, text: str) -> Optional[List[float]]:
+        """Public alias for _generate_embedding."""
+        return await self._generate_embedding(text)
+
     async def _generate_response_with_rotation(
         self,
         user_text: str,
@@ -322,7 +342,13 @@ class PrefrontalCortex:
 
         history = self._thalamus.get_history_for_model()
         persona_modifier = self._amygdala.get_response_modifier()
-        full_instruction = PERSONA_INSTRUCTION + persona_modifier
+        
+        # Fetch dynamic persona
+        active_persona = await self._hippocampus.get_active_persona()
+        base_instruction = active_persona["instruction"] if active_persona else PERSONA_INSTRUCTION
+        current_temperature = active_persona["temperature"] if active_persona else self.TEMPERATURE
+        
+        full_instruction = base_instruction + persona_modifier
 
         parts = []
         if context:
@@ -352,7 +378,7 @@ class PrefrontalCortex:
                     model=model,
                     contents=history,
                     config=types.GenerateContentConfig(
-                        temperature=self.TEMPERATURE,
+                        temperature=current_temperature,
                         top_p=self.TOP_P,
                         max_output_tokens=self.MAX_OUTPUT_TOKENS,
                         system_instruction=full_instruction
@@ -368,7 +394,8 @@ class PrefrontalCortex:
             except Exception as e:
                 last_error = e
                 error_str = str(e).lower()
-                if "rate" in error_str or "quota" in error_str or "429" in error_str or "exhausted" in error_str:
+                retry_triggers = ["rate", "quota", "429", "exhausted", "503", "unavailable", "overloaded"]
+                if any(trigger in error_str for trigger in retry_triggers):
                     if not API_ROTATOR.mark_failed():
                         raise AllAPIExhaustedError(f"All API combinations exhausted. Last error: {e}")
                     print(f"⚠️ Rotating API/Model. Attempt {attempt+1}/{max_retries}. Error: {e}")

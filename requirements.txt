@@ -1,2 +1,13 @@
 google-generativeai
 python-dotenv
+python-telegram-bot[job-queue]
+motor
+pymongo
+numpy
+httpx
+Pillow
+python-dateutil
+pydantic
+aiosqlite
+fastapi
+uvicorn[standard]

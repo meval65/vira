@@ -1,172 +1,395 @@
-# Vira Personal Life OS - Neural Architecture Documentation
+# 🧠 Vira - Personal Life OS
 
-## Overview
-
-Vira is a sophisticated Personal Life Operating System designed with a biologically inspired neural architecture. Unlike traditional chatbots, Vira operates as a cohesive system of specialized modules mimicking the human brain's functional regions. This architecture ensures high-performance low-latency execution, persistent memory with semantic retrieval, emotional state continuity, and proactive automated background processing.
-
-Designed exclusively for a single administrator, Vira eliminates multi-user routing overhead, prioritizing deep personalization and system security.
-
-## Neural System Architecture
-
-The system is composed of ten specialized modules, each responsible for distinct cognitive and operational functions:
-
-### 1. Brainstem (`brainstem.py`)
-**Role:** Central Nervous System & Entry Point
-- **Responsibility:** Bootstraps the application, loads environment configurations, and orchestrates the neural network.
-- **Functions:** 
-  - Initializes the Telegram application with concurrent update handling.
-  - Manages the `APIRotator` for failover logic across multiple API keys and models.
-  - Enforces admin-only security access control at the root level.
-
-### 2. Hippocampus (`hippocampus.py`)
-**Role:** Long-Term Memory & Knowledge Storage
-- **Responsibility:** Manages persistent data storage using asynchronous SQLite with WAL (Write-Ahead Logging) mode.
-- **Functions:**
-  - **Episodic Memory:** Stores user interactions with semantic fingerprinting to prevent duplication.
-  - **Knowledge Graph:** Manages Subject-Predicate-Object (SPO) triples for structured entity relationship tracking.
-  - **Schedule Management:** Handles temporal triggers for reminders and tasks.
-  - **Consolidation:** Periodically merges short-term buffers into long-term storage.
-
-### 3. Prefrontal Cortex (`prefrontal_cortex.py`)
-**Role:** Executive Function & Reasoning
-- **Responsibility:** Handles high-level cognitive processing, intent analysis, and response generation.
-- **Functions:**
-  - **Intent Extraction:** Analyzes user input to determine the required action (e.g., scheduling, memory recall, casual conversation).
-  - **Recursive Planning:** Decomposes complex user requests into executable multi-step plans.
-  - **Response Generation:** Utilizes Large Language Models (LLM) with automatic failover rotation.
-  - **Embedding Generation:** Converts inputs into vector embeddings for semantic search.
-
-### 4. Amygdala (`amygdala.py`)
-**Role:** Emotional Processing & Persona Management
-- **Responsibility:** Maintains a persistent emotional state that evolves based on interactions.
-- **Functions:**
-  - **Mood Tracking:** Tracks variables such as Happiness, Satisfaction, and Energy.
-  - **Persona Adaptation:** Dynamically adjusts system prompts (System Instructions) based on current mood (e.g., switching to a concerned tone if satisfaction is low).
-  - **Decay Logic:** Slowly returns emotional states to neutral over time via background processes.
-
-### 5. Thalamus (`thalamus.py`)
-**Role:** Sensory Relay & Context Management
-- **Responsibility:** Acts as the traffic controller for incoming information and short-term context window.
-- **Functions:**
-  - **Session Management:** Maintains the immediate conversation history window.
-  - **Context Assembly:** Aggregates relevant memories, schedules, and active plans into a coherent prompt context.
-  - **Semantic Retrieval:** Uses Cosine Similarity to retrieve historically relevant messages based on vector embeddings.
-
-### 6. Cerebellum (`cerebellum.py`)
-**Role:** Automated Background Processes
-- **Responsibility:** Handles asynchronous background tasks without blocking the main cognitive loop.
-- **Functions:**
-  - **Schedule Checker:** Runs every minute to trigger due reminders.
-  - **Memory Optimization:** Periodically deduplicates and indexes memories.
-  - **Session Cleanup:** Archives inactive sessions to optimize RAM usage.
-  - **Emotional Decay:** Applies temporal decay filters to emotional values.
-
-### 7. Occipital Lobe (`occipital_lobe.py`)
-**Role:** System Visibility & Visualization
-- **Responsibility:** Provides a Web API and WebSocket interface for the visual dashboard.
-- **Functions:**
-  - **System Status API:** Exposes endpoints for real-time monitoring of API health, active models, and memory stats.
-  - **Data Visualization:** Serves data for the React-based frontend dashboard.
-  - **Instruction Override:** Allows runtime modification of the core persona without system restart.
-
-### 8. Motor Cortex (`motor_cortex.py`)
-**Role:** Output Execution & Input Handling
-- **Responsibility:** Processes raw input signals (text, audio, images) and executes output actions.
-- **Audio Processing:** Integrates with Whisper (via Ollama) to transcribe voice messages and audio files.
-- **Command Handling:** Maps standardized commands (`/start`, `/status`, `/reset`) to system functions.
-
-### 9. Medulla Oblongata (`medulla_oblongata.py`)
-**Role:** Autonomic Utility Functions
-- **Responsibility:** Provides low-level survival utilities.
-- **Functions:**
-  - **Rate Limiting:** Protects the system from request flooding.
-  - **File I/O:** Safe handling of file uploads and downloads with size limits.
-  - **Sanitization:** Markdown escaping and input validation.
-
-### 10. Dashboard (`src/dashboard/index.html`)
-**Role:** User Interface
-- **Responsibility:** A single-page React application for monitoring the neural system.
-- **Features:** Real-time visualization of brain activity, system health, mood indicators, and memory feed.
+**Vira** adalah asisten AI personal berbasis arsitektur **Neuroscience-Inspired** yang dirancang untuk memahami, mengingat, dan merespons secara kontekstual layaknya manusia. Sistem ini menggunakan MongoDB sebagai "memori jangka panjang" dan menyimulasikan cara kerja otak manusia melalui modul-modul terpisah.
 
 ---
 
-## Key Technical Features
+## 📐 Arsitektur Sistem
 
-### Auto-Rotate API System
-To ensure 99.9% uptime, the system implements an `APIRotator` class.
-- **Logic:** `gemini-2.5-flash` -> `gemini-2.0-flash` -> `gemini-1.5-flash`.
-- **Failover:** If a rate limit (HTTP 429) is encountered, the request is instantly retried with the next model in the queue.
-- **Key Rotation:** If all models fail, it rotates to the next available Google API Key in the pool.
-
-### Vector Embedding Memory
-Instead of simple keyword matching, Vira uses semantic search.
-- **Model:** `bge-m3` (via Ollama).
-- **Process:** Every message is embedded into a high-dimensional vector.
-- **Retrieval:** When a user asks a question, the system calculates Cosine Similarity between the query vector and historical message vectors to retrieve the top 5 most relevant context pieces.
-
-### Proactive Audio Pipeline
-The `Motor Cortex` automatically detects voice messages.
-- **Pipeline:** Download -> Convert to OGG/MP3 -> Send to local Whisper model -> Inject Transcript into Chat Stream.
-
----
-
-## Installation & Setup
-
-### Prerequisites
-- **Python 3.12+**
-- **Ollama** (for local embeddings and audio transcription)
-  - Required models: `ollama pull bge-m3` and `ollama pull whisper`
-- **Google Gemini API Key** (Multiple keys recommended for rotation)
-- **Telegram Bot Token**
-
-### Environment Configuration
-Create a `.env` file in the root directory:
-
-```env
-# Core Credentials
-TELEGRAM_BOT_TOKEN=your_telegram_bot_token
-ADMIN_TELEGRAM_ID=your_numeric_telegram_id
-GOOGLE_API_KEY=key1,key2,key3
-
-# System Configuration
-DB_PATH=storage/memory.db
-CHAT_MODEL=models/gemini-2.5-flash
-OLLAMA_BASE_URL=http://localhost:11434/v1
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                          TELEGRAM BOT                                │
+│                     (User Interface Layer)                           │
+└────────────────────────────────┬────────────────────────────────────┘
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                          BRAINSTEM                                   │
+│              (Core Orchestrator & System Controller)                 │
+│  • Mengelola lifecycle semua modul                                   │
+│  • Routing pesan dari Telegram ke Prefrontal Cortex                 │
+│  • Background jobs (schedule check, proactive check)                │
+│  • NeuralEventBus untuk monitoring real-time                        │
+└────────────────────────────────┬────────────────────────────────────┘
+                                 │
+        ┌────────────────────────┼────────────────────────┐
+        │                        │                        │
+        ▼                        ▼                        ▼
+┌───────────────┐      ┌─────────────────┐      ┌───────────────┐
+│  HIPPOCAMPUS  │◄────►│ PREFRONTAL      │◄────►│   AMYGDALA    │
+│  (Memory)     │      │ CORTEX          │      │  (Emotion)    │
+│               │      │ (Decision)      │      │               │
+│ • Long-term   │      │                 │      │ • Detect      │
+│   memory      │      │ • Intent        │      │   emotion     │
+│ • Knowledge   │      │   analysis      │      │ • Adjust      │
+│   graph       │      │ • Response      │      │   empathy     │
+│ • Personas    │      │   generation    │      │ • Track       │
+│ • Schedules   │      │ • Embedding     │      │   satisfaction│
+└───────────────┘      │   creation      │      └───────────────┘
+        ▲              └────────┬────────┘              ▲
+        │                       │                       │
+        │              ┌────────┴────────┐              │
+        │              │    THALAMUS     │              │
+        │              │   (Context)     │              │
+        │              │                 │              │
+        └──────────────│ • Session mgmt  │──────────────┘
+                       │ • Hybrid context│
+                       │ • Vector search │
+                       └────────┬────────┘
+                                │
+                                ▼
+                       ┌─────────────────┐
+                       │  MOTOR CORTEX   │
+                       │   (Output)      │
+                       │                 │
+                       │ • Send response │
+                       │ • Format output │
+                       └─────────────────┘
+                                │
+                                ▼
+                       ┌─────────────────┐
+                       │ OCCIPITAL LOBE  │
+                       │  (Dashboard)    │
+                       │                 │
+                       │ • Web UI        │
+                       │ • REST API      │
+                       │ • WebSocket     │
+                       └─────────────────┘
 ```
 
-### Installation Steps
+---
 
-1. **Clone the Repository**
-2. **Install Dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
-   *Dependency Note: Ensure `aiohttp`, `python-telegram-bot[job-queue]`, `google-genai`, `aiosqlite`, `fastapi`, `uvicorn`, `pydantic`, `httpx`, `python-dotenv`, `pillow` are installed.*
+## 🧬 Modul-Modul Otak
 
-3. **Initialize Local Models**
-   ```bash
-   ollama pull bge-m3
-   ollama pull whisper
-   ```
+### 1. **Brainstem** (`src/brainstem.py`)
+**Fungsi:** Pusat kendali dan orkestrasi seluruh sistem.
 
-4. **Launch the System**
-   ```bash
-   python -m src.brainstem
-   ```
+| Komponen | Deskripsi |
+|----------|-----------|
+| `SystemConfig` | Konfigurasi sistem (model, admin ID, interval) |
+| `NeuralEventBus` | Event bus untuk monitoring real-time antar modul |
+| `APIRotator` | Rotasi API key Gemini untuk menghindari rate limit |
+| `BrainStem` | Inisialisasi & shutdown semua modul |
 
-## Usage Guide
+**Aliran Data:**
+```
+Telegram → Brainstem → PrefrontalCortex → Response → Telegram
+```
 
-### Bot Commands
-- `/start` - Initialize neural link.
-- `/status` - View crude system metrics.
-- `/reset` - Clear short-term context (Thalamus reset).
-- `/bio [text]` - Update administrative profile in Hippocampus.
+---
 
-### Dashboard Access
-When the system starts, the Occipital Lobe initializes a local web server.
-- **URL:** `http://localhost:5000`
-- **Features:**
-  - View real-time mood and satisfaction.
-  - Monitor API health and rotation status.
-  - override personas in real-time.
-  - Browse knowledge graph and memory feed.
+### 2. **Prefrontal Cortex** (`src/prefrontal_cortex.py`)
+**Fungsi:** Pengambilan keputusan, analisis intent, dan generasi respons.
+
+| Fitur | Deskripsi |
+|-------|-----------|
+| Intent Analysis | Mengekstrak intent dan entitas dari pesan |
+| Response Generation | Membuat respons menggunakan Gemini LLM |
+| Embedding Creation | Generate embedding vektor untuk setiap pesan |
+| Plan Execution | Menjalankan rencana multi-langkah |
+
+**Koneksi:**
+- **→ Hippocampus:** Query memori terkait
+- **→ Amygdala:** Cek emosi dan sesuaikan respons
+- **→ Thalamus:** Bangun konteks percakapan
+- **→ Motor Cortex:** Kirim output
+
+---
+
+### 3. **Hippocampus** (`src/hippocampus.py`)
+**Fungsi:** Penyimpanan dan retrieval memori jangka panjang.
+
+| Collection | Data |
+|------------|------|
+| `memories` | Fakta, preferensi, event, bio |
+| `knowledge_graph` | Triple (subject-predicate-object) |
+| `entities` | Register entitas unik |
+| `schedules` | Jadwal dan pengingat |
+| `personas` | Profil kepribadian AI |
+| `admin_profile` | Profil admin |
+| `emotional_state` | State emosional AI |
+
+**Algoritma:**
+- **Canonicalization:** Konversi teks → struktur (entity, relation, value)
+- **Fingerprinting:** Deteksi duplikat memori
+- **Memory Merging:** Gabung memori serupa dengan confidence boost
+- **Vector Search:** NumPy cosine similarity untuk retrieval semantik
+
+---
+
+### 4. **Amygdala** (`src/amygdala.py`)
+**Fungsi:** Deteksi dan respons emosional.
+
+| Metrik | Deskripsi |
+|--------|-----------|
+| `mood` | Kondisi mental saat ini (happy, sad, neutral, dll) |
+| `empathy` | Level empati (0.0 - 1.0) |
+| `satisfaction` | Kepuasan interaksi (-1.0 hingga 1.0) |
+
+**Fitur:**
+- Deteksi emosi dari teks pengguna
+- Adaptasi gaya respons berdasarkan emosi
+- Tracking perubahan mood sepanjang waktu
+
+---
+
+### 5. **Thalamus** (`src/thalamus.py`)
+**Fungsi:** Manajemen sesi dan pembangunan konteks.
+
+| Fitur | Deskripsi |
+|-------|-----------|
+| Hybrid Retrieval | 20 pesan terakhir + 5 pesan relevan via vector search |
+| Context Building | Gabung memori, jadwal, profil, cuaca → konteks |
+| Proactive Insights | Deteksi inactivity, reminder, knowledge gaps |
+| Weather Integration | Ambil data cuaca lokal |
+
+**TTL (Time-To-Live):**
+- Chat logs otomatis expire setelah **90 hari**
+
+---
+
+### 6. **Occipital Lobe** (`src/occipital_lobe.py`)
+**Fungsi:** Visualisasi dan antarmuka manajemen.
+
+| Endpoint | Method | Deskripsi |
+|----------|--------|-----------|
+| `/api/memories` | GET/POST/PUT/DELETE | CRUD memori |
+| `/api/chat-logs` | GET/DELETE | Riwayat percakapan |
+| `/api/schedules` | GET/POST/DELETE | Jadwal |
+| `/api/personas` | GET/POST/PUT/DELETE | Persona AI |
+| `/api/profile` | GET/PUT | Profil admin |
+| `/api/neural-status` | GET | Status modul real-time |
+| `/ws` | WebSocket | Neural activity stream |
+
+---
+
+## 🔄 Aliran Data Pemrosesan Pesan
+
+```
+1. USER mengirim pesan via Telegram
+   │
+   ▼
+2. BRAINSTEM menerima & validasi (admin only)
+   │
+   ▼
+3. PREFRONTAL CORTEX memproses:
+   │
+   ├── 3a. Generate EMBEDDING untuk pesan
+   │
+   ├── 3b. Ekstrak INTENT (intent type, entities, sentiment)
+   │       └── Emit: prefrontal_cortex → amygdala (emotion_check)
+   │
+   ├── 3c. AMYGDALA deteksi emosi & adjust empathy
+   │       └── Return: emotion data
+   │
+   ├── 3d. Query HIPPOCAMPUS untuk memori relevan
+   │       └── Emit: prefrontal_cortex → hippocampus (memory_retrieval)
+   │       └── Return: relevant memories
+   │
+   ├── 3e. THALAMUS bangun konteks hybrid
+   │       └── Short-term: 20 pesan terakhir
+   │       └── Long-term: 5 pesan similar (vector search)
+   │       └── Return: full context
+   │
+   └── 3f. Generate RESPONSE dengan LLM
+           └── Emit: prefrontal_cortex → motor_cortex (output_sent)
+   │
+   ▼
+4. Update SESSION (simpan pesan + respons + embeddings)
+   │
+   ▼
+5. POST-PROCESS (background):
+   │
+   ├── Analisis respons untuk ekstraksi memori baru
+   ├── Update knowledge graph jika ada relasi baru
+   └── Simpan emotional state
+   │
+   ▼
+6. RESPONSE dikirim ke Telegram
+```
+
+---
+
+## 📊 Database Schema (MongoDB)
+
+### Collections
+
+| Collection | Deskripsi | TTL |
+|------------|-----------|-----|
+| `memories` | Memori jangka panjang | - |
+| `chat_logs` | Riwayat percakapan | 90 hari |
+| `knowledge_graph` | Triple relasi | - |
+| `entities` | Entitas unik | - |
+| `schedules` | Jadwal & reminder | - |
+| `personas` | Profil kepribadian | - |
+| `admin_profile` | Single document | - |
+| `emotional_state` | Single document | - |
+
+### Memory Document
+```json
+{
+  "_id": "uuid",
+  "summary": "User suka kopi hitam tanpa gula",
+  "type": "preference",
+  "priority": 0.8,
+  "confidence": 0.9,
+  "embedding": [0.12, -0.05, ...],
+  "fingerprint": "preference:likes:kopi",
+  "entity": "kopi",
+  "relation": "likes",
+  "created_at": "2024-01-01T12:00:00",
+  "last_used": "2024-01-15T09:30:00",
+  "use_count": 5,
+  "status": "active"
+}
+```
+
+---
+
+## 🖥️ Dashboard Features
+
+### Brain Activity Monitor
+- **Real-time visualization** modul otak yang aktif
+- **Animated data flow** antar modul
+- **Per-module status** (idle/active + current task)
+- **Event log** perpindahan data
+
+### CRUD Operations
+- **Memories:** Create, Read, Update, Delete
+- **Chat Logs:** Read, Search, Delete
+- **Schedules:** Create, Read, Delete
+- **Personas:** Create, Activate, Delete
+- **Profile:** Read, Update
+
+---
+
+## 🚀 Getting Started
+
+### Prerequisites
+- Python 3.11+
+- MongoDB Community Edition
+- Telegram Bot Token
+
+### Installation
+
+```bash
+# Clone repository
+cd vira
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Configure environment
+cp .env.example .env
+# Edit .env dengan API keys
+
+# Start MongoDB
+mongod
+
+# Run migration (jika ada data SQLite lama)
+python -m src.migration.migrate_sqlite_to_mongo
+
+# Start bot
+python -m src.brainstem
+```
+
+### Environment Variables
+
+| Variable | Deskripsi |
+|----------|-----------|
+| `GOOGLE_API_KEY` | Gemini API key(s), comma-separated |
+| `TELEGRAM_BOT_TOKEN` | Token dari @BotFather |
+| `ADMIN_TELEGRAM_ID` | Telegram ID admin |
+| `MONGO_URI` | MongoDB connection string |
+| `MONGO_DB_NAME` | Nama database |
+| `CHAT_MODEL` | Model Gemini untuk chat |
+
+---
+
+## 📁 Project Structure
+
+```
+vira/
+├── src/
+│   ├── brainstem.py         # Core orchestrator
+│   ├── prefrontal_cortex.py # Decision & response
+│   ├── hippocampus.py       # Memory storage
+│   ├── amygdala.py          # Emotion processing
+│   ├── thalamus.py          # Context management
+│   ├── occipital_lobe.py    # Dashboard API
+│   ├── db/
+│   │   └── mongo_client.py  # MongoDB connection
+│   ├── dashboard/
+│   │   └── index.html       # Web dashboard
+│   └── migration/
+│       └── migrate_sqlite_to_mongo.py
+├── storage/                  # Local file storage
+├── requirements.txt
+├── .env
+└── README.md
+```
+
+---
+
+## 🔧 API Reference
+
+### Memories
+```http
+GET    /api/memories?limit=50
+POST   /api/memories          {"summary": "...", "memory_type": "fact"}
+PUT    /api/memories/{id}     {"summary": "..."}
+DELETE /api/memories/{id}
+```
+
+### Chat Logs
+```http
+GET    /api/chat-logs?limit=50
+GET    /api/chat-logs/search?q=keyword
+DELETE /api/chat-logs/{id}
+DELETE /api/chat-logs         # Clear all
+```
+
+### Schedules
+```http
+GET    /api/schedules
+POST   /api/schedules         {"context": "...", "scheduled_at": "ISO8601"}
+DELETE /api/schedules/{id}
+```
+
+### Neural Status
+```http
+GET    /api/neural-status     # Real-time module states
+GET    /api/system-status     # System health & config
+```
+
+---
+
+## 📜 License
+
+MIT License - Bebas digunakan dan dimodifikasi.
+
+---
+
+## 🧠 Philosophy
+
+Vira dibangun dengan filosofi bahwa AI assistant yang efektif harus:
+
+1. **Mengingat** - Tidak melupakan informasi penting tentang pengguna
+2. **Memahami Konteks** - Menghubungkan percakapan masa lalu dengan sekarang
+3. **Berempati** - Menyesuaikan gaya komunikasi dengan kondisi emosional
+4. **Proaktif** - Mengingatkan tanpa diminta ketika diperlukan
+5. **Transparan** - Menyediakan akses penuh ke "isi otaknya"
+
+---
+
+**Built with 💜 for personal productivity**

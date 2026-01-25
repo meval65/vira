@@ -1,19 +1,34 @@
+"""
+Thalamus Module - Session and Context Management for Vira.
+
+This module handles:
+- Chat session management with MongoDB chat_logs
+- Hybrid context retrieval (short-term + vector-based long-term)
+- Proactive insight generation
+- Weather context integration
+
+Refactored to use MongoDB for session storage with automatic TTL expiry.
+"""
+
 import os
 import json
 import asyncio
 import datetime
 import hashlib
 import httpx
+import math
+import random
+import numpy as np
 from collections import deque
 from typing import List, Dict, Optional, Any, Deque
 from dataclasses import dataclass, field
 from enum import Enum
-import math
 
 import PIL.Image
 from google.genai import types
 
-from src.brainstem import METEOSOURCE_API_KEY
+from src.brainstem import METEOSOURCE_API_KEY, NeuralEventBus
+from src.db.mongo_client import get_mongo_client, MongoDBClient
 
 
 class InsightType(str, Enum):
@@ -55,17 +70,42 @@ class SessionMessage:
 
 
 class Thalamus:
-    MAX_HISTORY: int = 40
+    """
+    Session and context manager using MongoDB.
+    
+    Implements hybrid retrieval:
+    - Short-term: Last 20 messages from chat_logs
+    - Long-term: 3-5 semantically similar messages via NumPy vector search
+    """
+    
+    MAX_SHORT_TERM: int = 20
+    LONG_TERM_TOP_K: int = 5
+    SIMILARITY_THRESHOLD: float = 0.75
     INACTIVITY_THRESHOLD_HOURS: int = 72
     COOLDOWN_MINUTES: int = 120
-    SESSION_DIR: str = "storage/sessions"
     DEFAULT_LAT: float = -7.6398581
     DEFAULT_LON: float = 112.2395766
     WEATHER_CACHE_TTL: int = 1800
 
+    INACTIVITY_PROMPTS = [
+        "Hei, lu kemana aja? Udah lama gak ngobrol nih. Semua baik-baik aja kan?",
+        "Sepi banget nih gak ada lu. Lagi sibuk apa sekarang?",
+        "Woy, masih idup kan? 😂 Canda deng. Muncul dong!",
+        "Kangen deh ngobrol sama lu. Lagi ngerjain apa?",
+        "Eh, ada cerita seru apa nih akhir-akhir ini? Share dong!"
+    ]
+    
+    KNOWLEDGE_PROMPTS = [
+        "Gw masih belum kenal lu lebih jauh nih. Ceritain sesuatu tentang diri lu dong!",
+        "Gw penasaran, hobi lu sebenernya apa sih selain yang biasa lu ceritain?",
+        "Coba kasih tau gw satu fakta unik tentang diri lu yang jarang orang tau.",
+        "Kalo lu bisa pergi ke mana aja sekarang, lu mau ke mana? Biar gw lebih tau selera lu.",
+        "Apa sih mimpi terbesar lu saat ini? Gw pengen tau lebih banyak soal ambisi lu."
+    ]
+
     def __init__(self, hippocampus):
         self._hippocampus = hippocampus
-        self._session: Deque[SessionMessage] = deque(maxlen=self.MAX_HISTORY)
+        self._mongo: Optional[MongoDBClient] = None
         self._metadata: Dict[str, Any] = {
             "summary": "",
             "memory_summary": "",
@@ -79,53 +119,72 @@ class Thalamus:
         self._context_cache: Dict[str, Any] = {}
 
     async def initialize(self) -> None:
-        os.makedirs(self.SESSION_DIR, exist_ok=True)
-        await self._load_session()
+        """Initialize MongoDB connection for session storage."""
+        self._mongo = get_mongo_client()
+        # Connection already established by hippocampus
+        await self._load_metadata()
 
-    async def _load_session(self) -> None:
-        session_file = os.path.join(self.SESSION_DIR, "admin_session.json")
-        if os.path.exists(session_file):
-            try:
-                with open(session_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    for msg in data.get("history", []):
-                        self._session.append(SessionMessage(
-                            role=msg.get("role", "user"),
-                            content=msg.get("content", ""),
-                            timestamp=datetime.datetime.fromisoformat(msg.get("timestamp", datetime.datetime.now().isoformat())),
-                            image_path=msg.get("image_path")
-                        ))
-                    self._metadata = data.get("metadata", self._metadata)
-            except Exception:
-                pass
-
-    async def _save_session(self) -> None:
-        session_file = os.path.join(self.SESSION_DIR, "admin_session.json")
-        try:
-            data = {
-                "history": [
-                    {
-                        "role": msg.role,
-                        "content": msg.content,
-                        "timestamp": msg.timestamp.isoformat(),
-                        "image_path": msg.image_path,
-                        "embedding": msg.embedding
-                    }
-                    for msg in self._session
-                ],
-                "metadata": self._metadata
+    async def _load_metadata(self) -> None:
+        """Load session metadata from MongoDB."""
+        doc = await self._mongo.db["session_metadata"].find_one({"_id": "admin"})
+        if doc:
+            self._metadata = {
+                "summary": doc.get("summary", ""),
+                "memory_summary": doc.get("memory_summary", ""),
+                "schedule_summary": doc.get("schedule_summary", ""),
+                "last_analysis_count": doc.get("last_analysis_count", 0),
+                "last_interaction": doc.get("last_interaction")
             }
-            with open(session_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+            # Load insight cache
+            for k, v in doc.get("insight_cache", {}).items():
+                try:
+                    self._insight_cache[k] = datetime.datetime.fromisoformat(v)
+                except Exception:
+                    pass
 
-    def get_session(self) -> List[SessionMessage]:
-        return list(self._session)
+    async def _save_metadata(self) -> None:
+        """Save session metadata to MongoDB."""
+        await self._mongo.db["session_metadata"].update_one(
+            {"_id": "admin"},
+            {"$set": {
+                "summary": self._metadata.get("summary", ""),
+                "memory_summary": self._metadata.get("memory_summary", ""),
+                "schedule_summary": self._metadata.get("schedule_summary", ""),
+                "last_analysis_count": self._metadata.get("last_analysis_count", 0),
+                "last_interaction": self._metadata.get("last_interaction"),
+                "insight_cache": {k: v.isoformat() for k, v in self._insight_cache.items()}
+            }},
+            upsert=True
+        )
+
+    async def get_session(self, limit: int = 40) -> List[SessionMessage]:
+        """Get recent session messages from MongoDB."""
+        cursor = self._mongo.chat_logs.find().sort("timestamp", -1).limit(limit)
+        docs = await cursor.to_list(length=limit)
+        
+        messages = []
+        for doc in reversed(docs):  # Reverse to get chronological order
+            messages.append(SessionMessage(
+                role=doc.get("role", "user"),
+                content=doc.get("content", ""),
+                timestamp=doc.get("timestamp", datetime.datetime.now()),
+                image_path=doc.get("image_path"),
+                embedding=doc.get("embedding")
+            ))
+        return messages
 
     def get_history_for_model(self) -> List[types.Content]:
+        """Get session history formatted for Gemini model (async wrapper needed)."""
+        # This will be called from async context, return empty for sync access
+        # The actual implementation should be called via async method
+        return []
+
+    async def get_history_for_model_async(self) -> List[types.Content]:
+        """Get session history formatted for Gemini model."""
+        messages = await self.get_session(limit=self.MAX_SHORT_TERM)
         history = []
-        for msg in self._session:
+        
+        for msg in messages:
             parts = []
             if msg.content:
                 parts.append(types.Part.from_text(text=msg.content))
@@ -137,6 +196,7 @@ class Thalamus:
                     pass
             if parts:
                 history.append(types.Content(role=msg.role, parts=parts))
+        
         return history
 
     async def update_session(
@@ -147,30 +207,117 @@ class Thalamus:
         user_embedding: Optional[List[float]] = None,
         ai_embedding: Optional[List[float]] = None
     ) -> None:
-        self._session.append(SessionMessage(
-            role="user",
-            content=user_text,
-            image_path=image_path,
-            embedding=user_embedding
-        ))
-        self._session.append(SessionMessage(
-            role="model",
-            content=ai_response,
-            embedding=ai_embedding
-        ))
-        self._metadata["last_interaction"] = datetime.datetime.now().isoformat()
-        await self._save_session()
+        """Store new messages in MongoDB chat_logs."""
+        now = datetime.datetime.now()
+        
+        # Store user message
+        await self._mongo.chat_logs.insert_one({
+            "role": "user",
+            "content": user_text,
+            "timestamp": now,
+            "image_path": image_path,
+            "embedding": user_embedding
+        })
+        
+        # Store AI response
+        await self._mongo.chat_logs.insert_one({
+            "role": "model",
+            "content": ai_response,
+            "timestamp": now + datetime.timedelta(milliseconds=1),
+            "embedding": ai_embedding
+        })
+        
+        self._metadata["last_interaction"] = now.isoformat()
+        await self._save_metadata()
 
     def _cosine_similarity(self, vec1: List[float], vec2: List[float]) -> float:
-        """Calculate cosine similarity between two vectors."""
+        """Calculate cosine similarity between two vectors using NumPy."""
         if not vec1 or not vec2 or len(vec1) != len(vec2):
             return 0.0
-        dot_product = sum(a * b for a, b in zip(vec1, vec2))
-        norm1 = math.sqrt(sum(a * a for a in vec1))
-        norm2 = math.sqrt(sum(b * b for b in vec2))
+        
+        v1 = np.array(vec1, dtype=np.float32)
+        v2 = np.array(vec2, dtype=np.float32)
+        
+        norm1 = np.linalg.norm(v1)
+        norm2 = np.linalg.norm(v2)
+        
         if norm1 == 0 or norm2 == 0:
             return 0.0
-        return dot_product / (norm1 * norm2)
+        
+        return float(np.dot(v1, v2) / (norm1 * norm2))
+
+    async def get_hybrid_context(
+        self,
+        query_embedding: Optional[List[float]],
+        short_term_limit: int = 20,
+        long_term_limit: int = 5
+    ) -> Dict[str, List[SessionMessage]]:
+        """
+        Retrieve hybrid context: short-term recent + long-term relevant.
+        
+        Returns:
+            {
+                "short_term": [last 20 messages],
+                "long_term": [3-5 relevant older messages]
+            }
+        """
+        await NeuralEventBus.set_activity("thalamus", "Building Hybrid Context")
+        
+        # Short-term: Last N messages
+        short_term_cursor = self._mongo.chat_logs.find().sort("timestamp", -1).limit(short_term_limit)
+        short_term_docs = await short_term_cursor.to_list(length=short_term_limit)
+        
+        short_term = []
+        oldest_short_term = None
+        for doc in reversed(short_term_docs):
+            short_term.append(SessionMessage(
+                role=doc.get("role", "user"),
+                content=doc.get("content", ""),
+                timestamp=doc.get("timestamp", datetime.datetime.now()),
+                image_path=doc.get("image_path"),
+                embedding=doc.get("embedding")
+            ))
+            if oldest_short_term is None or doc.get("timestamp", datetime.datetime.now()) < oldest_short_term:
+                oldest_short_term = doc.get("timestamp")
+        
+        # Long-term: Semantically relevant older messages
+        long_term = []
+        if query_embedding and oldest_short_term:
+            # Fetch older messages with embeddings
+            long_term_cursor = self._mongo.chat_logs.find({
+                "timestamp": {"$lt": oldest_short_term},
+                "embedding": {"$exists": True, "$ne": None}
+            }).limit(100)  # Limit to last 100 for performance
+            
+            long_term_docs = await long_term_cursor.to_list(length=100)
+            
+            # Score by similarity
+            scored = []
+            for doc in long_term_docs:
+                emb = doc.get("embedding")
+                if emb:
+                    sim = self._cosine_similarity(query_embedding, emb)
+                    if sim >= self.SIMILARITY_THRESHOLD:
+                        scored.append((doc, sim))
+            
+            # Sort by similarity descending
+            scored.sort(key=lambda x: x[1], reverse=True)
+            
+            for doc, _ in scored[:long_term_limit]:
+                long_term.append(SessionMessage(
+                    role=doc.get("role", "user"),
+                    content=doc.get("content", ""),
+                    timestamp=doc.get("timestamp", datetime.datetime.now()),
+                    image_path=doc.get("image_path"),
+                    embedding=doc.get("embedding")
+                ))
+        
+        await NeuralEventBus.clear_activity("thalamus")
+        
+        return {
+            "short_term": short_term,
+            "long_term": long_term
+        }
 
     def get_relevant_history(
         self,
@@ -178,22 +325,54 @@ class Thalamus:
         top_k: int = 5,
         min_similarity: float = 0.5
     ) -> List[SessionMessage]:
-        """Retrieve top-k semantically similar messages via cosine similarity."""
+        """
+        Synchronous version for backward compatibility.
+        Note: This returns empty list in sync context. Use get_hybrid_context instead.
+        """
+        return []
+
+    async def get_relevant_history_async(
+        self,
+        query_embedding: Optional[List[float]],
+        top_k: int = 5,
+        min_similarity: float = 0.5
+    ) -> List[SessionMessage]:
+        """Retrieve semantically similar messages via NumPy vector search."""
         if not query_embedding:
             return []
-
-        scored_messages = []
-        for msg in self._session:
-            if msg.embedding:
-                sim = self._cosine_similarity(query_embedding, msg.embedding)
+        
+        # Fetch messages with embeddings
+        cursor = self._mongo.chat_logs.find({
+            "embedding": {"$exists": True, "$ne": None}
+        }).limit(200)
+        
+        docs = await cursor.to_list(length=200)
+        
+        scored = []
+        for doc in docs:
+            emb = doc.get("embedding")
+            if emb:
+                sim = self._cosine_similarity(query_embedding, emb)
                 if sim >= min_similarity:
-                    scored_messages.append((sim, msg))
+                    scored.append((doc, sim))
+        
+        scored.sort(key=lambda x: x[1], reverse=True)
+        
+        result = []
+        for doc, _ in scored[:top_k]:
+            result.append(SessionMessage(
+                role=doc.get("role", "user"),
+                content=doc.get("content", ""),
+                timestamp=doc.get("timestamp", datetime.datetime.now()),
+                image_path=doc.get("image_path"),
+                embedding=doc.get("embedding")
+            ))
+        
+        return result
 
-        scored_messages.sort(key=lambda x: x[0], reverse=True)
-        return [msg for _, msg in scored_messages[:top_k]]
-
-    def clear_session(self) -> None:
-        self._session.clear()
+    async def clear_session(self) -> None:
+        """Clear all chat logs (use with caution)."""
+        await self._mongo.chat_logs.delete_many({})
         self._metadata = {
             "summary": "",
             "memory_summary": "",
@@ -201,9 +380,11 @@ class Thalamus:
             "last_analysis_count": 0,
             "last_interaction": None
         }
+        await self._save_metadata()
 
     async def cleanup_session(self) -> None:
-        await self._save_session()
+        """Cleanup hook - metadata is auto-saved after each update."""
+        await self._save_metadata()
 
     def get_summary(self) -> str:
         return self._metadata.get("summary", "")
@@ -232,8 +413,11 @@ class Thalamus:
         relevant_memories: List[Dict],
         schedule_context: Optional[str] = None,
         intent_data: Optional[Dict] = None,
-        user_metrics: Optional[Dict] = None
+        user_metrics: Optional[Dict] = None,
+        query_embedding: Optional[List[float]] = None
     ) -> str:
+        """Build comprehensive context for response generation."""
+        await NeuralEventBus.emit("thalamus", "prefrontal_cortex", "context_ready")
         sections = []
 
         now = datetime.datetime.now()
@@ -284,6 +468,18 @@ class Thalamus:
                 intent_parts.append(f"Sentiment: {intent_data['sentiment']}")
             if intent_parts:
                 sections.append(f"[INTENT ANALYSIS]\n" + "\n".join(intent_parts))
+
+        # Add hybrid context (long-term relevant messages)
+        if query_embedding:
+            hybrid = await self.get_hybrid_context(query_embedding, short_term_limit=0, long_term_limit=5)
+            if hybrid.get("long_term"):
+                lt_lines = []
+                for msg in hybrid["long_term"][:3]:
+                    time_str = msg.timestamp.strftime("%d/%m %H:%M")
+                    role = "User" if msg.role == "user" else "Vira"
+                    content = msg.content[:150] + "..." if len(msg.content) > 150 else msg.content
+                    lt_lines.append(f"[{time_str}] {role}: {content}")
+                sections.append(f"[RELEVANT PAST CONVERSATIONS]\n" + "\n".join(lt_lines))
 
         summary = self._metadata.get("summary", "")
         if summary:
@@ -369,7 +565,7 @@ class Thalamus:
                 return ProactiveInsight(
                     insight_type=InsightType.INACTIVITY,
                     priority=InsightPriority.MEDIUM,
-                    message="Hei, lu kemana aja? Udah lama gak ngobrol nih. Semua baik-baik aja kan?",
+                    message=random.choice(self.INACTIVITY_PROMPTS),
                     context={"hours_inactive": hours_since}
                 )
         except Exception:
@@ -405,7 +601,7 @@ class Thalamus:
             return ProactiveInsight(
                 insight_type=InsightType.KNOWLEDGE,
                 priority=InsightPriority.LOW,
-                message="Gw masih belum kenal lu lebih jauh nih. Ceritain sesuatu tentang diri lu dong!",
+                message=random.choice(self.KNOWLEDGE_PROMPTS),
                 context={"memory_count": stats.get("active", 0)}
             )
         return None

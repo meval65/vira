@@ -4,79 +4,69 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Vira Neural Dashboard - Pro Edition</title>
-    <!-- Frameworks -->
+    <title>Vira Neural Dashboard - Complete Edition</title>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Icons & Fonts -->
     <script src="https://unpkg.com/lucide@latest"></script>
     <link
-        href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
         rel="stylesheet">
-
     <style>
         :root {
-            --bg-deep: #050508;
-            --bg-card: rgba(22, 22, 33, 0.7);
+            --bg: #0a0a0f;
+            --card: rgba(18, 18, 28, 0.9);
             --accent: #8b5cf6;
-            --accent-glow: rgba(139, 92, 246, 0.4);
+        }
+
+        * {
+            box-sizing: border-box;
         }
 
         body {
-            font-family: 'Plus Jakarta Sans', sans-serif;
-            background: var(--bg-deep);
-            background-image:
-                radial-gradient(circle at 0% 0%, rgba(139, 92, 246, 0.15) 0%, transparent 40%),
-                radial-gradient(circle at 100% 100%, rgba(59, 130, 246, 0.1) 0%, transparent 40%);
-            color: #f1f1f4;
+            font-family: 'Inter', sans-serif;
+            background: var(--bg);
+            color: #e2e8f0;
+            margin: 0;
             min-height: 100vh;
         }
 
         .glass {
-            background: var(--bg-card);
+            background: var(--card);
             backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
             border: 1px solid rgba(255, 255, 255, 0.08);
-            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
         }
 
-        .neo-glow {
-            box-shadow: 0 0 20px var(--accent-glow);
+        .mono {
+            font-family: 'JetBrains Mono', monospace;
         }
 
-        .shimmer {
-            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.03), transparent);
-            background-size: 200% 100%;
-            animation: shimmer 2s infinite;
+        .scrollbar::-webkit-scrollbar {
+            width: 5px;
         }
 
-        @keyframes shimmer {
-            0% {
-                background-position: -200% 0;
+        .scrollbar::-webkit-scrollbar-thumb {
+            background: rgba(139, 92, 246, 0.4);
+            border-radius: 3px;
+        }
+
+        .fade-in {
+            animation: fadeIn 0.2s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
             }
 
-            100% {
-                background-position: 200% 0;
+            to {
+                opacity: 1;
             }
         }
 
-        .custom-scrollbar::-webkit-scrollbar {
-            width: 4px;
-        }
-
-        .custom-scrollbar::-webkit-scrollbar-track {
-            background: rgba(0, 0, 0, 0.1);
-        }
-
-        .custom-scrollbar::-webkit-scrollbar-thumb {
-            background: rgba(139, 92, 246, 0.3);
-            border-radius: 10px;
-        }
-
-        .status-pulse {
-            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        .pulse {
+            animation: pulse 2s infinite;
         }
 
         @keyframes pulse {
@@ -84,485 +74,585 @@
             0%,
             100% {
                 opacity: 1;
-                transform: scale(1);
             }
 
             50% {
-                opacity: .5;
-                transform: scale(1.1);
+                opacity: 0.5;
             }
         }
 
-        .card-transition {
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        .live-dot {
+            animation: liveDot 1.5s infinite;
         }
 
-        .card-transition:hover {
-            transform: translateY(-4px);
-            border-color: rgba(139, 92, 246, 0.4);
-            background: rgba(22, 22, 33, 0.9);
-        }
+        @keyframes liveDot {
 
-        .mono {
-            font-family: 'JetBrains Mono', monospace;
+            0%,
+            100% {
+                box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+            }
+
+            70% {
+                box-shadow: 0 0 0 8px rgba(16, 185, 129, 0);
+            }
         }
     </style>
 </head>
 
 <body>
     <div id="root"></div>
-
     <script type="text/babel">
-        const { useState, useEffect, useCallback, useMemo } = React;
+        const { useState, useEffect, useCallback, useRef } = React;
+        const API = window.location.origin;
 
-        // Mock Lucide components for Babel/CDN usage
+        // Icon Component
         const Icon = ({ name, size = 18, className = "" }) => {
-            useEffect(() => {
-                if (window.lucide) {
-                    window.lucide.createIcons();
-                }
-            }, [name]);
+            useEffect(() => { window.lucide?.createIcons(); }, [name]);
             return <i data-lucide={name} style={{ width: size, height: size }} className={className}></i>;
         };
 
-        const API_BASE = window.location.origin;
-
-        const MOOD_MAP = {
-            neutral: { icon: 'meh', color: 'text-gray-400', label: 'Netral' },
-            happy: { icon: 'smile', color: 'text-emerald-400', label: 'Bahagia' },
-            sad: { icon: 'frown', color: 'text-blue-400', label: 'Sedih' },
-            concerned: { icon: 'alert-circle', color: 'text-amber-400', label: 'Khawatir' },
-            proud: { icon: 'award', color: 'text-purple-400', label: 'Bangga' },
-            disappointed: { icon: 'thumbs-down', color: 'text-orange-400', label: 'Kecewa' },
-            excited: { icon: 'zap', color: 'text-yellow-400', label: 'Bersemangat' }
+        // API Helpers
+        const api = {
+            get: async (ep) => { try { const r = await fetch(`${API}${ep}`); return r.ok ? await r.json() : null; } catch { return null; } },
+            post: async (ep, d) => { const r = await fetch(`${API}${ep}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(d) }); return r.ok ? await r.json() : null; },
+            put: async (ep, d) => { const r = await fetch(`${API}${ep}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(d) }); return r.ok ? await r.json() : null; },
+            del: async (ep) => { const r = await fetch(`${API}${ep}`, { method: 'DELETE' }); return r.ok; }
         };
 
-        const fetchAPI = async (endpoint) => {
-            try {
-                // Dalam demo ini kita fallback ke objek kosong jika 404
-                const res = await fetch(`${API_BASE}${endpoint}`);
-                if (!res.ok) throw new Error('Network failure');
-                return await res.json();
-            } catch (e) {
-                console.warn(`API Error on ${endpoint}:`, e.message);
-                return null;
-            }
-        };
+        // Stat Card
+        const Stat = ({ icon, value, label, color = "violet" }) => (
+            <div className="glass rounded-xl p-4 flex items-center gap-3">
+                <div className={`p-2 rounded-lg bg-${color}-500/20`}><Icon name={icon} size={20} className={`text-${color}-400`} /></div>
+                <div><p className="text-xl font-bold text-white">{value}</p><p className="text-[10px] text-slate-400 uppercase">{label}</p></div>
+            </div>
+        );
 
-        const StatCard = ({ icon, value, label, trend }) => (
-            <div className="glass rounded-2xl p-5 card-transition group overflow-hidden relative">
-                <div className="shimmer absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"></div>
-                <div className="flex justify-between items-start mb-4">
-                    <div className="p-2.5 bg-violet-500/10 rounded-xl text-violet-400">
-                        <Icon name={icon} size={22} />
+        // Modal
+        const Modal = ({ title, onClose, children, wide }) => (
+            <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 fade-in" onClick={onClose}>
+                <div className={`glass rounded-2xl p-6 ${wide ? 'w-full max-w-3xl' : 'w-full max-w-lg'} max-h-[90vh] overflow-y-auto scrollbar`} onClick={e => e.stopPropagation()}>
+                    <div className="flex justify-between items-center mb-4">
+                        <h3 className="text-lg font-bold text-white">{title}</h3>
+                        <button onClick={onClose} className="text-slate-400 hover:text-white"><Icon name="x" size={20} /></button>
                     </div>
-                    {trend && (
-                        <span className={`text-xs font-bold px-2 py-1 rounded-lg ${trend > 0 ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`}>
-                            {trend > 0 ? '+' : ''}{trend}%
-                        </span>
-                    )}
-                </div>
-                <div className="space-y-1">
-                    <h3 className="text-3xl font-bold tracking-tight text-white">{value}</h3>
-                    <p className="text-sm text-slate-400 font-medium">{label}</p>
+                    {children}
                 </div>
             </div>
         );
 
-        const MoodComponent = ({ mood, satisfaction }) => {
-            const current = MOOD_MAP[mood?.toLowerCase()] || MOOD_MAP.neutral;
-            const percentage = ((satisfaction + 1) * 50).toFixed(0);
+        // Tab Button
+        const Tab = ({ active, icon, label, onClick, badge }) => (
+            <button onClick={onClick} className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${active ? 'bg-violet-500/20 text-violet-400 border border-violet-500/50' : 'text-slate-400 hover:text-white hover:bg-white/5 border border-transparent'}`}>
+                <Icon name={icon} size={16} />{label}
+                {badge > 0 && <span className="ml-1 px-1.5 py-0.5 text-[9px] bg-violet-500 text-white rounded-full">{badge}</span>}
+            </button>
+        );
+
+        // ==================== MEMORIES PANEL ====================
+        const MemoriesPanel = ({ data, refresh }) => {
+            const [showForm, setShowForm] = useState(false);
+            const [editId, setEditId] = useState(null);
+            const [form, setForm] = useState({ summary: '', memory_type: 'general', priority: 0.5 });
+
+            const save = async () => {
+                if (!form.summary.trim()) return;
+                if (editId) await api.put(`/api/memories/${editId}`, { summary: form.summary });
+                else await api.post('/api/memories', form);
+                setShowForm(false); setEditId(null); setForm({ summary: '', memory_type: 'general', priority: 0.5 }); refresh();
+            };
+            const del = async (id) => { if (confirm('Hapus memori ini?')) { await api.del(`/api/memories/${id}`); refresh(); } };
+            const edit = (m) => { setEditId(m.id); setForm({ summary: m.summary, memory_type: m.memory_type, priority: m.priority }); setShowForm(true); };
 
             return (
-                <div className="glass rounded-2xl p-6 card-transition h-full">
-                    <div className="flex items-center gap-2 mb-6">
-                        <Icon name="activity" className="text-violet-400" />
-                        <h2 className="text-sm font-bold uppercase tracking-widest text-slate-400">Status Emosional</h2>
+                <div className="space-y-4 fade-in">
+                    <div className="flex justify-between items-center">
+                        <h2 className="text-lg font-bold flex items-center gap-2"><Icon name="brain" /> Memories <span className="text-slate-500 text-sm">({data.length})</span></h2>
+                        <button onClick={() => { setEditId(null); setForm({ summary: '', memory_type: 'general', priority: 0.5 }); setShowForm(true); }} className="px-3 py-1.5 bg-violet-600 hover:bg-violet-500 rounded-lg text-sm font-medium">+ Add</button>
+                    </div>
+                    <div className="space-y-2 max-h-[60vh] overflow-y-auto scrollbar pr-1">
+                        {data.map(m => (
+                            <div key={m.id} className="group p-3 bg-white/5 hover:bg-white/10 rounded-lg border border-white/5 flex justify-between items-start transition-all">
+                                <div className="flex-1 min-w-0">
+                                    <div className="flex items-center gap-2 mb-1">
+                                        <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${m.memory_type === 'fact' ? 'bg-emerald-500/20 text-emerald-400' : m.memory_type === 'preference' ? 'bg-blue-500/20 text-blue-400' : 'bg-slate-500/20 text-slate-400'}`}>{m.memory_type}</span>
+                                        <span className="text-[9px] text-slate-500">Pri: {(m.priority * 100).toFixed(0)}%</span>
+                                    </div>
+                                    <p className="text-sm text-slate-200">{m.summary}</p>
+                                </div>
+                                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity ml-2">
+                                    <button onClick={() => edit(m)} className="p-1.5 rounded bg-blue-500/20 text-blue-400 hover:bg-blue-500 hover:text-white"><Icon name="edit-2" size={12} /></button>
+                                    <button onClick={() => del(m.id)} className="p-1.5 rounded bg-rose-500/20 text-rose-400 hover:bg-rose-500 hover:text-white"><Icon name="trash-2" size={12} /></button>
+                                </div>
+                            </div>
+                        ))}
+                        {data.length === 0 && <p className="text-center text-slate-500 py-8">No memories yet</p>}
+                    </div>
+                    {showForm && (
+                        <Modal title={editId ? "Edit Memory" : "Add Memory"} onClose={() => setShowForm(false)}>
+                            <div className="space-y-4">
+                                <textarea value={form.summary} onChange={e => setForm({ ...form, summary: e.target.value })} placeholder="Memory content..." className="w-full h-24 bg-black/30 rounded-lg p-3 text-sm border border-white/10 focus:border-violet-500 focus:outline-none" />
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label className="text-[10px] text-slate-400 uppercase mb-1 block">Type</label>
+                                        <select value={form.memory_type} onChange={e => setForm({ ...form, memory_type: e.target.value })} className="w-full bg-black/30 rounded-lg p-2 text-sm border border-white/10">
+                                            <option value="general">General</option>
+                                            <option value="fact">Fact</option>
+                                            <option value="preference">Preference</option>
+                                            <option value="event">Event</option>
+                                            <option value="bio">Bio</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="text-[10px] text-slate-400 uppercase mb-1 block">Priority</label>
+                                        <input type="number" step="0.1" min="0" max="1" value={form.priority} onChange={e => setForm({ ...form, priority: parseFloat(e.target.value) || 0.5 })} className="w-full bg-black/30 rounded-lg p-2 text-sm border border-white/10" />
+                                    </div>
+                                </div>
+                                <button onClick={save} className="w-full py-2 bg-violet-600 hover:bg-violet-500 rounded-lg font-medium">{editId ? 'Update' : 'Save'}</button>
+                            </div>
+                        </Modal>
+                    )}
+                </div>
+            );
+        };
+
+        // ==================== SCHEDULES PANEL ====================
+        const SchedulesPanel = ({ data, refresh }) => {
+            const [showForm, setShowForm] = useState(false);
+            const [form, setForm] = useState({ context: '', scheduled_at: '', priority: 0 });
+
+            const save = async () => {
+                if (!form.context.trim() || !form.scheduled_at) return;
+                await api.post('/api/schedules', form);
+                setShowForm(false); setForm({ context: '', scheduled_at: '', priority: 0 }); refresh();
+            };
+            const del = async (id) => { if (confirm('Batalkan jadwal ini?')) { await api.del(`/api/schedules/${id}`); refresh(); } };
+
+            return (
+                <div className="space-y-4 fade-in">
+                    <div className="flex justify-between items-center">
+                        <h2 className="text-lg font-bold flex items-center gap-2"><Icon name="calendar" /> Schedules <span className="text-slate-500 text-sm">({data.length})</span></h2>
+                        <button onClick={() => setShowForm(true)} className="px-3 py-1.5 bg-violet-600 hover:bg-violet-500 rounded-lg text-sm font-medium">+ Add</button>
+                    </div>
+                    <div className="space-y-2 max-h-[60vh] overflow-y-auto scrollbar pr-1">
+                        {data.map(s => (
+                            <div key={s.id} className="group p-3 bg-white/5 hover:bg-white/10 rounded-lg border border-white/5 flex justify-between items-start transition-all">
+                                <div className="flex-1 min-w-0">
+                                    <div className="flex items-center gap-2 mb-1">
+                                        <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${s.status === 'pending' ? 'bg-amber-500/20 text-amber-400' : s.status === 'executed' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-500/20 text-slate-400'}`}>{s.status}</span>
+                                        <span className="text-[10px] text-slate-500 mono">{s.scheduled_at?.replace('T', ' ').substring(0, 16)}</span>
+                                    </div>
+                                    <p className="text-sm text-slate-200">{s.context}</p>
+                                </div>
+                                <button onClick={() => del(s.id)} className="p-1.5 rounded bg-rose-500/20 text-rose-400 hover:bg-rose-500 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity ml-2"><Icon name="trash-2" size={12} /></button>
+                            </div>
+                        ))}
+                        {data.length === 0 && <p className="text-center text-slate-500 py-8">No schedules</p>}
+                    </div>
+                    {showForm && (
+                        <Modal title="Add Schedule" onClose={() => setShowForm(false)}>
+                            <div className="space-y-4">
+                                <textarea value={form.context} onChange={e => setForm({ ...form, context: e.target.value })} placeholder="Reminder content..." className="w-full h-20 bg-black/30 rounded-lg p-3 text-sm border border-white/10 focus:border-violet-500 focus:outline-none" />
+                                <input type="datetime-local" value={form.scheduled_at} onChange={e => setForm({ ...form, scheduled_at: e.target.value })} className="w-full bg-black/30 rounded-lg p-3 text-sm border border-white/10" />
+                                <button onClick={save} className="w-full py-2 bg-violet-600 hover:bg-violet-500 rounded-lg font-medium">Create</button>
+                            </div>
+                        </Modal>
+                    )}
+                </div>
+            );
+        };
+
+        // ==================== CHAT LOGS PANEL ====================
+        const ChatLogsPanel = ({ data, refresh }) => {
+            const [search, setSearch] = useState('');
+            const [results, setResults] = useState(null);
+
+            const doSearch = async () => {
+                if (search.length < 2) { setResults(null); return; }
+                const r = await api.get(`/api/chat-logs/search?q=${encodeURIComponent(search)}`);
+                setResults(r || []);
+            };
+            const del = async (id) => { if (confirm('Hapus?')) { await api.del(`/api/chat-logs/${id}`); refresh(); } };
+            const clearAll = async () => { if (confirm('HAPUS SEMUA chat logs?')) { await api.del('/api/chat-logs'); refresh(); } };
+
+            const list = results !== null ? results : data;
+
+            return (
+                <div className="space-y-4 fade-in">
+                    <div className="flex justify-between items-center gap-4">
+                        <h2 className="text-lg font-bold flex items-center gap-2"><Icon name="message-circle" /> Chat Logs <span className="text-slate-500 text-sm">({data.length})</span></h2>
+                        <button onClick={clearAll} className="px-3 py-1.5 bg-rose-600/20 hover:bg-rose-600 text-rose-400 hover:text-white rounded-lg text-sm font-medium">Clear All</button>
+                    </div>
+                    <div className="flex gap-2">
+                        <input value={search} onChange={e => setSearch(e.target.value)} onKeyDown={e => e.key === 'Enter' && doSearch()} placeholder="Search..." className="flex-1 bg-black/30 rounded-lg px-3 py-2 text-sm border border-white/10 focus:border-violet-500 focus:outline-none" />
+                        <button onClick={doSearch} className="px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg"><Icon name="search" size={16} /></button>
+                    </div>
+                    {results !== null && <div className="text-xs text-slate-400 flex justify-between"><span>{results.length} results</span><button onClick={() => { setResults(null); setSearch(''); }} className="text-violet-400">Clear</button></div>}
+                    <div className="space-y-2 max-h-[55vh] overflow-y-auto scrollbar pr-1">
+                        {list.map(c => (
+                            <div key={c.id} className="group p-3 bg-white/5 hover:bg-white/10 rounded-lg border border-white/5 flex justify-between items-start transition-all">
+                                <div className="flex-1 min-w-0">
+                                    <div className="flex items-center gap-2 mb-1">
+                                        <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${c.role === 'user' ? 'bg-blue-500/20 text-blue-400' : 'bg-emerald-500/20 text-emerald-400'}`}>{c.role}</span>
+                                        <span className="text-[9px] text-slate-500 mono">{c.timestamp?.split('T')[0]}</span>
+                                    </div>
+                                    <p className="text-sm text-slate-200 line-clamp-2">{c.content}</p>
+                                </div>
+                                <button onClick={() => del(c.id)} className="p-1.5 rounded bg-rose-500/20 text-rose-400 hover:bg-rose-500 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity ml-2"><Icon name="trash-2" size={12} /></button>
+                            </div>
+                        ))}
+                        {list.length === 0 && <p className="text-center text-slate-500 py-8">No chat logs</p>}
+                    </div>
+                </div>
+            );
+        };
+
+        // ==================== KNOWLEDGE GRAPH PANEL ====================
+        const KnowledgePanel = ({ triples, entities }) => (
+            <div className="space-y-6 fade-in">
+                <div>
+                    <h2 className="text-lg font-bold flex items-center gap-2 mb-3"><Icon name="share-2" /> Triples ({triples.length})</h2>
+                    <div className="space-y-2 max-h-[30vh] overflow-y-auto scrollbar pr-1">
+                        {triples.map(t => (
+                            <div key={t.id} className="flex items-center gap-2 p-3 bg-white/5 rounded-lg text-sm">
+                                <span className="px-2 py-0.5 bg-violet-500/20 text-violet-400 rounded mono text-xs">{t.subject}</span>
+                                <span className="text-slate-400 italic">{t.predicate}</span>
+                                <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-400 rounded mono text-xs">{t.object}</span>
+                                <span className="ml-auto text-[10px] text-slate-500">{(t.confidence * 100).toFixed(0)}%</span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+                <div>
+                    <h2 className="text-lg font-bold flex items-center gap-2 mb-3"><Icon name="users" /> Entities ({entities.length})</h2>
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 max-h-[25vh] overflow-y-auto scrollbar pr-1">
+                        {entities.map(e => (
+                            <div key={e.id} className="p-3 bg-white/5 rounded-lg">
+                                <p className="text-sm font-medium text-white truncate">{e.name}</p>
+                                <p className="text-[10px] text-slate-400">{e.entity_type} • {e.mention_count}x</p>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            </div>
+        );
+
+        // ==================== PERSONAS PANEL ====================
+        const PersonasPanel = ({ data, refresh }) => {
+            const [showForm, setShowForm] = useState(false);
+            const [form, setForm] = useState({ name: '', instruction: '', temperature: 0.7 });
+
+            const save = async () => {
+                if (!form.name.trim() || !form.instruction.trim()) return;
+                await api.post('/api/personas', form);
+                setShowForm(false); setForm({ name: '', instruction: '', temperature: 0.7 }); refresh();
+            };
+            const activate = async (id) => { await api.post(`/api/personas/${id}/activate`); refresh(); };
+            const del = async (id) => { if (confirm('Hapus persona ini?')) { await api.del(`/api/personas/${id}`); refresh(); } };
+
+            return (
+                <div className="space-y-4 fade-in">
+                    <div className="flex justify-between items-center">
+                        <h2 className="text-lg font-bold flex items-center gap-2"><Icon name="sparkles" /> Personas ({data.length})</h2>
+                        <button onClick={() => setShowForm(true)} className="px-3 py-1.5 bg-violet-600 hover:bg-violet-500 rounded-lg text-sm font-medium">+ Add</button>
+                    </div>
+                    <div className="space-y-3 max-h-[60vh] overflow-y-auto scrollbar pr-1">
+                        {data.map(p => (
+                            <div key={p.id} className={`p-4 rounded-xl border transition-all ${p.is_active ? 'bg-violet-500/10 border-violet-500/50' : 'bg-white/5 border-white/5'}`}>
+                                <div className="flex justify-between items-start mb-2">
+                                    <div>
+                                        <h4 className="font-bold text-white flex items-center gap-2">{p.name} {p.is_active && <span className="text-[9px] bg-violet-500 text-white px-2 py-0.5 rounded-full">ACTIVE</span>}</h4>
+                                        <p className="text-[10px] text-slate-400">Temp: {p.temperature}</p>
+                                    </div>
+                                    <div className="flex gap-2">
+                                        {!p.is_active && <button onClick={() => activate(p.id)} className="p-1.5 rounded bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500 hover:text-white"><Icon name="check" size={14} /></button>}
+                                        <button onClick={() => del(p.id)} disabled={p.is_active} className={`p-1.5 rounded ${p.is_active ? 'opacity-30 cursor-not-allowed' : 'bg-rose-500/20 text-rose-400 hover:bg-rose-500 hover:text-white'}`}><Icon name="trash-2" size={14} /></button>
+                                    </div>
+                                </div>
+                                <p className="text-xs text-slate-300 line-clamp-3 italic">{p.instruction}</p>
+                            </div>
+                        ))}
+                    </div>
+                    {showForm && (
+                        <Modal title="Create Persona" onClose={() => setShowForm(false)}>
+                            <div className="space-y-4">
+                                <input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Persona name..." className="w-full bg-black/30 rounded-lg p-3 text-sm border border-white/10 focus:border-violet-500 focus:outline-none" />
+                                <textarea value={form.instruction} onChange={e => setForm({ ...form, instruction: e.target.value })} placeholder="System instruction..." className="w-full h-32 bg-black/30 rounded-lg p-3 text-sm border border-white/10 focus:border-violet-500 focus:outline-none" />
+                                <div className="flex items-center gap-3">
+                                    <span className="text-sm text-slate-400">Temperature:</span>
+                                    <input type="range" min="0" max="1" step="0.1" value={form.temperature} onChange={e => setForm({ ...form, temperature: parseFloat(e.target.value) })} className="flex-1 accent-violet-500" />
+                                    <span className="text-sm text-white mono w-10">{form.temperature}</span>
+                                </div>
+                                <button onClick={save} className="w-full py-2 bg-violet-600 hover:bg-violet-500 rounded-lg font-medium">Create</button>
+                            </div>
+                        </Modal>
+                    )}
+                </div>
+            );
+        };
+
+        // ==================== SETTINGS PANEL (Instruction + Temperature) ====================
+        const SettingsPanel = ({ instruction, system, refresh }) => {
+            const [text, setText] = useState(instruction?.instruction || '');
+            const [name, setName] = useState(instruction?.name || 'Custom');
+
+            const save = async () => {
+                if (text.length < 10) { alert('Instruction must be at least 10 chars'); return; }
+                await api.put('/api/custom-instruction', { instruction: text, name });
+                refresh();
+                alert('Instruction updated!');
+            };
+            const reset = async () => {
+                await api.post('/api/reset-instruction');
+                refresh();
+                alert('Reset to default!');
+            };
+
+            return (
+                <div className="space-y-6 fade-in">
+                    <div>
+                        <h2 className="text-lg font-bold flex items-center gap-2 mb-4"><Icon name="settings" /> Model Settings</h2>
+                        <div className="grid md:grid-cols-2 gap-4 mb-4">
+                            <div className="p-4 bg-white/5 rounded-xl">
+                                <p className="text-[10px] text-slate-400 uppercase mb-1">Current Model</p>
+                                <p className="text-white font-medium mono text-sm">{system?.api?.current_model?.split('/').pop() || 'N/A'}</p>
+                            </div>
+                            <div className="p-4 bg-white/5 rounded-xl">
+                                <p className="text-[10px] text-slate-400 uppercase mb-1">API Health</p>
+                                <p className={`font-bold ${system?.api?.health === 'healthy' ? 'text-emerald-400' : 'text-amber-400'}`}>{system?.api?.health || 'Unknown'}</p>
+                            </div>
+                        </div>
                     </div>
 
-                    <div className="flex items-center gap-6">
-                        <div className={`p-5 rounded-3xl bg-white/5 border border-white/10 ${current.color} neo-glow`}>
-                            <Icon name={current.icon} size={48} />
-                        </div>
-                        <div className="flex-1 space-y-4">
+                    <div>
+                        <h2 className="text-lg font-bold flex items-center gap-2 mb-4"><Icon name="file-text" /> Custom Instruction</h2>
+                        <div className="space-y-4">
                             <div>
-                                <p className="text-xs text-slate-500 uppercase font-bold tracking-tighter mb-1">Kondisi Mental</p>
-                                <p className="text-2xl font-bold text-white capitalize">{current.label}</p>
+                                <label className="text-[10px] text-slate-400 uppercase mb-1 block">Instruction Name</label>
+                                <input value={name} onChange={e => setName(e.target.value)} className="w-full bg-black/30 rounded-lg p-3 text-sm border border-white/10 focus:border-violet-500 focus:outline-none" />
                             </div>
-                            <div className="space-y-2">
-                                <div className="flex justify-between text-xs font-bold">
-                                    <span className="text-slate-400">Kepuasan</span>
-                                    <span className="text-violet-400">{percentage}%</span>
-                                </div>
-                                <div className="h-2 w-full bg-white/5 rounded-full overflow-hidden">
-                                    <div
-                                        className="h-full bg-gradient-to-r from-violet-600 to-indigo-400 transition-all duration-1000 ease-out shadow-[0_0_10px_rgba(139,92,246,0.5)]"
-                                        style={{ width: `${percentage}%` }}
-                                    />
-                                </div>
+                            <div>
+                                <label className="text-[10px] text-slate-400 uppercase mb-1 block">System Instruction</label>
+                                <textarea value={text} onChange={e => setText(e.target.value)} className="w-full h-48 bg-black/30 rounded-lg p-3 text-sm border border-white/10 focus:border-violet-500 focus:outline-none mono" placeholder="Enter custom system instruction..." />
                             </div>
+                            <div className="flex gap-3">
+                                <button onClick={save} className="flex-1 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg font-medium">Save Instruction</button>
+                                <button onClick={reset} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg font-medium">Reset to Default</button>
+                            </div>
+                            <p className="text-[10px] text-slate-500">Current: <span className={instruction?.is_custom ? 'text-violet-400' : 'text-slate-400'}>{instruction?.name || 'Default'}</span> • Length: {instruction?.instruction?.length || 0} chars</p>
                         </div>
                     </div>
                 </div>
             );
         };
 
-        const KnowledgeTriple = ({ t }) => (
-            <div className="flex items-center gap-3 p-3 bg-white/5 rounded-xl border border-transparent hover:border-violet-500/30 transition-all group">
-                <div className="flex flex-1 items-center gap-2 min-w-0">
-                    <span className="mono text-xs px-2 py-0.5 bg-violet-500/10 text-violet-400 rounded shrink-0">{t.subject}</span>
-                    <Icon name="arrow-right" size={12} className="text-slate-600 shrink-0" />
-                    <span className="text-xs text-slate-300 font-medium truncate italic">{t.predicate}</span>
-                    <Icon name="arrow-right" size={12} className="text-slate-600 shrink-0" />
-                    <span className="mono text-xs px-2 py-0.5 bg-emerald-500/10 text-emerald-400 rounded shrink-0">{t.object}</span>
-                </div>
-                <div className="flex items-center gap-1.5 shrink-0">
-                    <div className="w-12 h-1 bg-slate-800 rounded-full overflow-hidden">
-                        <div className="h-full bg-violet-500" style={{ width: `${t.confidence * 100}%` }}></div>
-                    </div>
-                    <span className="text-[10px] font-bold text-slate-500">{(t.confidence * 100).toFixed(0)}%</span>
-                </div>
-            </div>
-        );
+        // ==================== PROFILE PANEL ====================
+        const ProfilePanel = ({ profile, emotional, refresh }) => {
+            const [form, setForm] = useState({ full_name: profile.full_name || '', additional_info: profile.additional_info || '' });
 
-        const App = () => {
-            const [connected, setConnected] = useState(false);
-            const [data, setData] = useState({
-                stats: { memories: 0, triples: 0, pending_schedules: 0, entities: 0 },
-                emotional: { mood: 'neutral', satisfaction: 0 },
-                memories: [],
-                schedules: [],
-                triples: [],
-                profile: {},
-                systemStatus: null,
-                customInstruction: null
-            });
-            const [loading, setLoading] = useState(true);
-            const [showInstructionEditor, setShowInstructionEditor] = useState(false);
-            const [instructionText, setInstructionText] = useState('');
-
-            const loadData = useCallback(async () => {
-                const results = await Promise.all([
-                    fetchAPI('/api/stats'),
-                    fetchAPI('/api/emotional-state'),
-                    fetchAPI('/api/memories?limit=8'),
-                    fetchAPI('/api/schedules?limit=5'),
-                    fetchAPI('/api/triples?limit=6'),
-                    fetchAPI('/api/profile'),
-                    fetchAPI('/api/system-status'),
-                    fetchAPI('/api/custom-instruction')
-                ]);
-
-                setData({
-                    stats: results[0] || data.stats,
-                    emotional: results[1] || data.emotional,
-                    memories: results[2] || [],
-                    schedules: results[3] || [],
-                    triples: results[4] || [],
-                    profile: results[5] || {},
-                    systemStatus: results[6],
-                    customInstruction: results[7]
-                });
-                setLoading(false);
-            }, [data]);
-
-            const updateInstruction = async () => {
-                if (instructionText.length < 10) return;
-                try {
-                    await fetch(`${API_BASE}/api/custom-instruction`, {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ instruction: instructionText, name: 'Custom Override' })
-                    });
-                    setShowInstructionEditor(false);
-                    loadData();
-                } catch (e) { console.error(e); }
-            };
-
-            const resetInstruction = async () => {
-                try {
-                    await fetch(`${API_BASE}/api/reset-instruction`, { method: 'POST' });
-                    setShowInstructionEditor(false);
-                    loadData();
-                } catch (e) { console.error(e); }
-            };
-
-            useEffect(() => {
-                loadData();
-                const interval = setInterval(loadData, 20000);
-
-                const wsUrl = `${API_BASE.replace('http', 'ws')}/ws`;
-                const ws = new WebSocket(wsUrl);
-                ws.onopen = () => setConnected(true);
-                ws.onclose = () => setConnected(false);
-                ws.onmessage = () => loadData();
-
-                return () => {
-                    clearInterval(interval);
-                    ws.close();
-                };
-            }, []);
+            const save = async () => { await api.put('/api/profile', form); refresh(); alert('Profile updated!'); };
 
             return (
-                <div className="max-w-[1440px] mx-auto p-4 md:p-8 space-y-8">
-                    {/* Header Section */}
-                    <header className="flex flex-col md:flex-row justify-between items-center gap-6">
-                        <div className="flex items-center gap-5">
-                            <div className="relative">
-                                <div className="w-14 h-14 bg-gradient-to-br from-violet-600 to-indigo-600 rounded-2xl flex items-center justify-center neo-glow">
-                                    <Icon name="brain-circuit" size={32} className="text-white" />
-                                </div>
-                                <div className="absolute -bottom-1 -right-1 w-5 h-5 bg-emerald-500 rounded-full border-4 border-[#050508] status-pulse"></div>
+                <div className="space-y-6 fade-in">
+                    <div>
+                        <h2 className="text-lg font-bold flex items-center gap-2 mb-4"><Icon name="user" /> Admin Profile</h2>
+                        <div className="space-y-4">
+                            <div className="p-4 bg-white/5 rounded-xl">
+                                <p className="text-[10px] text-slate-400 uppercase mb-1">Telegram</p>
+                                <p className="text-lg font-bold text-white">@{profile.telegram_name || 'unknown'}</p>
                             </div>
                             <div>
-                                <h1 className="text-2xl font-extrabold tracking-tight text-white flex items-center gap-2">
-                                    Vira Neural <span className="text-violet-500">Core</span>
-                                </h1>
-                                <p className="text-slate-500 text-sm font-medium">Sistem Operasi Kehidupan Personal • v2.4.0</p>
+                                <label className="text-[10px] text-slate-400 uppercase mb-1 block">Full Name</label>
+                                <input value={form.full_name} onChange={e => setForm({ ...form, full_name: e.target.value })} className="w-full bg-black/30 rounded-lg p-3 text-sm border border-white/10 focus:border-violet-500 focus:outline-none" />
                             </div>
+                            <div>
+                                <label className="text-[10px] text-slate-400 uppercase mb-1 block">Additional Info</label>
+                                <textarea value={form.additional_info} onChange={e => setForm({ ...form, additional_info: e.target.value })} className="w-full h-20 bg-black/30 rounded-lg p-3 text-sm border border-white/10 focus:border-violet-500 focus:outline-none" />
+                            </div>
+                            <button onClick={save} className="px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg font-medium">Save Profile</button>
                         </div>
+                    </div>
 
+                    <div>
+                        <h2 className="text-lg font-bold flex items-center gap-2 mb-4"><Icon name="heart" /> Emotional State</h2>
+                        <div className="grid grid-cols-3 gap-3">
+                            <div className="p-4 bg-white/5 rounded-xl text-center"><p className="text-xl font-bold text-white capitalize">{emotional.mood || 'neutral'}</p><p className="text-[10px] text-slate-400 uppercase">Mood</p></div>
+                            <div className="p-4 bg-white/5 rounded-xl text-center"><p className="text-xl font-bold text-violet-400">{((emotional.empathy || 0.5) * 100).toFixed(0)}%</p><p className="text-[10px] text-slate-400 uppercase">Empathy</p></div>
+                            <div className="p-4 bg-white/5 rounded-xl text-center"><p className="text-xl font-bold text-emerald-400">{((emotional.satisfaction || 0) * 50 + 50).toFixed(0)}%</p><p className="text-[10px] text-slate-400 uppercase">Satisfaction</p></div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // ==================== NEURAL ACTIVITY PANEL ====================
+        const NeuralPanel = ({ events, moduleStates, activities }) => {
+            const MODULES = ['prefrontal_cortex', 'hippocampus', 'amygdala', 'thalamus', 'motor_cortex', 'brainstem'];
+            const LABELS = { prefrontal_cortex: 'Prefrontal Cortex', hippocampus: 'Hippocampus', amygdala: 'Amygdala', thalamus: 'Thalamus', motor_cortex: 'Motor Cortex', brainstem: 'Brainstem' };
+            const COLORS = { prefrontal_cortex: '#8b5cf6', hippocampus: '#10b981', amygdala: '#f43f5e', thalamus: '#3b82f6', motor_cortex: '#f59e0b', brainstem: '#06b6d4' };
+
+            return (
+                <div className="space-y-4 fade-in">
+                    <h2 className="text-lg font-bold flex items-center gap-2"><Icon name="activity" /> Neural Activity <span className="w-2 h-2 rounded-full bg-emerald-500 live-dot ml-2"></span></h2>
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                        {MODULES.map(key => {
+                            const isActive = moduleStates[key] === 'active';
+                            const activity = activities[key];
+                            return (
+                                <div key={key} className={`p-3 rounded-xl border transition-all ${isActive ? 'bg-white/10 border-emerald-500/50' : 'bg-white/5 border-white/5'}`}>
+                                    <div className="flex items-center gap-2 mb-1">
+                                        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: isActive ? '#10b981' : '#475569' }}></span>
+                                        <span className="text-xs font-bold" style={{ color: COLORS[key] }}>{LABELS[key]}</span>
+                                    </div>
+                                    {activity ? <p className="text-[10px] text-emerald-400 mono truncate">▶ {activity}</p> : <p className="text-[10px] text-slate-600 mono">● Idle</p>}
+                                </div>
+                            );
+                        })}
+                    </div>
+                    <div>
+                        <h3 className="text-xs font-bold text-slate-400 uppercase mb-2">Event Log</h3>
+                        <div className="h-32 overflow-y-auto scrollbar bg-black/20 rounded-lg p-2 space-y-1">
+                            {events.slice(-15).reverse().map((evt, i) => (
+                                <div key={i} className="flex items-center gap-2 text-[10px] mono">
+                                    <span className="text-slate-500">{new Date().toLocaleTimeString()}</span>
+                                    <span className="text-violet-400">{evt.source}</span>
+                                    <span className="text-slate-600">→</span>
+                                    <span className="text-emerald-400">{evt.target}</span>
+                                    <span className="text-slate-400 truncate flex-1">{evt.message}</span>
+                                </div>
+                            ))}
+                            {events.length === 0 && <p className="text-slate-600 text-center">Waiting for activity...</p>}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // ==================== MAIN APP ====================
+        const App = () => {
+            const [tab, setTab] = useState('overview');
+            const [connected, setConnected] = useState(false);
+            const [loading, setLoading] = useState(false);
+            const [data, setData] = useState({
+                stats: {}, memories: [], chatLogs: [], schedules: [], triples: [], entities: [], personas: [],
+                profile: {}, emotional: {}, system: {}, instruction: {}, neuralEvents: [], moduleStates: {}, activities: {}
+            });
+
+            const refresh = useCallback(async () => {
+                setLoading(true);
+                const [stats, memories, chatLogs, schedules, triples, entities, personas, profile, emotional, system, instruction, neural] = await Promise.all([
+                    api.get('/api/stats'), api.get('/api/memories?limit=100'), api.get('/api/chat-logs?limit=100'),
+                    api.get('/api/schedules?limit=50'), api.get('/api/triples?limit=50'), api.get('/api/entities?limit=50'),
+                    api.get('/api/personas'), api.get('/api/profile'), api.get('/api/emotional-state'),
+                    api.get('/api/system-status'), api.get('/api/custom-instruction'), api.get('/api/neural-status')
+                ]);
+                setData(prev => ({
+                    ...prev, stats: stats || {}, memories: memories || [], chatLogs: chatLogs || [], schedules: schedules || [],
+                    triples: triples || [], entities: entities || [], personas: personas || [], profile: profile || {},
+                    emotional: emotional || {}, system: system || {}, instruction: instruction || {},
+                    moduleStates: neural || {}, activities: neural?._meta?.activities || {}
+                }));
+                setLoading(false);
+            }, []);
+
+            useEffect(() => {
+                refresh();
+                const interval = setInterval(refresh, 10000); // Refresh every 10 seconds
+
+                // WebSocket for real-time updates
+                const ws = new WebSocket(`${API.replace('http', 'ws')}/ws`);
+                ws.onopen = () => setConnected(true);
+                ws.onclose = () => setConnected(false);
+                ws.onmessage = (event) => {
+                    try {
+                        const msg = JSON.parse(event.data);
+                        if (msg.type === 'neural_activity') {
+                            setData(prev => ({
+                                ...prev,
+                                neuralEvents: [...prev.neuralEvents.slice(-50), msg.data],
+                                moduleStates: { ...prev.moduleStates, [msg.data.source]: 'active', [msg.data.target]: 'active' },
+                                activities: msg.data.activities || prev.activities
+                            }));
+                            setTimeout(() => {
+                                setData(prev => ({ ...prev, moduleStates: { ...prev.moduleStates, [msg.data.source]: 'idle', [msg.data.target]: 'idle' } }));
+                            }, 2000);
+                        } else {
+                            refresh();
+                        }
+                    } catch { }
+                };
+
+                return () => { clearInterval(interval); ws.close(); };
+            }, [refresh]);
+
+            return (
+                <div className="max-w-7xl mx-auto p-4 md:p-6">
+                    {/* Header */}
+                    <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
+                        <div className="flex items-center gap-4">
+                            <div className="w-12 h-12 bg-gradient-to-br from-violet-600 to-indigo-600 rounded-xl flex items-center justify-center"><Icon name="brain-circuit" size={28} className="text-white" /></div>
+                            <div><h1 className="text-xl font-bold text-white">Vira <span className="text-violet-400">Dashboard</span></h1><p className="text-xs text-slate-400">Complete Neural Management System</p></div>
+                        </div>
                         <div className="flex items-center gap-3">
-                            <button
-                                onClick={loadData}
-                                className="p-2.5 rounded-xl bg-white/5 border border-white/10 text-slate-400 hover:text-white hover:bg-white/10 transition-all"
-                                title="Segarkan Data"
-                            >
-                                <Icon name="refresh-cw" size={20} className={loading ? 'animate-spin' : ''} />
-                            </button>
-                            <div className="px-4 py-2 glass rounded-xl border-white/5 flex items-center gap-3">
-                                <div className={`w-2 h-2 rounded-full ${connected ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-rose-500'} transition-colors`}></div>
-                                <span className="text-xs font-bold uppercase tracking-widest text-slate-300">
-                                    {connected ? 'Neural Link Active' : 'Offline Mode'}
-                                </span>
+                            <button onClick={refresh} className={`p-2 rounded-lg bg-white/5 hover:bg-white/10 ${loading ? 'animate-spin' : ''}`}><Icon name="refresh-cw" size={18} className="text-slate-400" /></button>
+                            <div className="flex items-center gap-2 px-3 py-2 glass rounded-lg">
+                                <div className={`w-2 h-2 rounded-full ${connected ? 'bg-emerald-500 live-dot' : 'bg-rose-500'}`}></div>
+                                <span className="text-xs font-medium">{connected ? 'LIVE' : 'Offline'}</span>
                             </div>
                         </div>
                     </header>
 
-                    {/* Stats Grid */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
-                        <StatCard icon="database" value={data.stats.memories} label="Ingatan Tersimpan" trend={12} />
-                        <StatCard icon="share-2" value={data.stats.triples} label="Relasi Pengetahuan" trend={5} />
-                        <StatCard icon="calendar-clock" value={data.stats.pending_schedules} label="Agenda Mendatang" />
-                        <StatCard icon="users" value={data.stats.entities} label="Entitas Terdata" trend={-2} />
+                    {/* Stats */}
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+                        <Stat icon="brain" value={data.stats.memories || 0} label="Memories" />
+                        <Stat icon="message-circle" value={data.chatLogs.length} label="Chat Logs" color="blue" />
+                        <Stat icon="calendar" value={data.stats.pending_schedules || 0} label="Schedules" color="amber" />
+                        <Stat icon="share-2" value={data.stats.triples || 0} label="Triples" color="emerald" />
+                        <Stat icon="users" value={data.stats.entities || 0} label="Entities" color="rose" />
                     </div>
 
-                    {/* Brain Activity & System Status */}
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                        {/* Brain Activity Panel */}
-                        <div className="glass rounded-2xl p-6">
-                            <div className="flex items-center gap-2 mb-5">
-                                <Icon name="cpu" className="text-emerald-400" />
-                                <h2 className="text-sm font-bold uppercase tracking-widest text-slate-400">Brain Activity</h2>
-                            </div>
-                            <div className="grid grid-cols-2 gap-3">
-                                {['Brainstem', 'Hippocampus', 'Amygdala', 'Thalamus', 'Prefrontal Cortex', 'Motor Cortex', 'Cerebellum', 'Occipital Lobe'].map((module, i) => (
-                                    <div key={i} className="flex items-center gap-2 p-3 bg-white/5 rounded-xl">
-                                        <div className={`w-2 h-2 rounded-full ${i < 6 ? 'bg-emerald-500 status-pulse' : 'bg-slate-600'}`}></div>
-                                        <span className="text-xs font-medium text-slate-300">{module}</span>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-
-                        {/* System Status Panel */}
-                        <div className="glass rounded-2xl p-6">
-                            <div className="flex items-center justify-between mb-5">
-                                <div className="flex items-center gap-2">
-                                    <Icon name="server" className="text-blue-400" />
-                                    <h2 className="text-sm font-bold uppercase tracking-widest text-slate-400">System Status</h2>
-                                </div>
-                                <span className={`text-xs font-bold px-2 py-1 rounded ${data.systemStatus?.api?.health === 'healthy' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400'}`}>
-                                    {data.systemStatus?.api?.health || 'Unknown'}
-                                </span>
-                            </div>
-                            <div className="space-y-4">
-                                <div className="p-4 bg-white/5 rounded-xl">
-                                    <p className="text-[10px] font-bold text-slate-500 uppercase mb-2">Active Model</p>
-                                    <p className="text-white font-bold mono text-sm">{data.systemStatus?.api?.current_model || 'Loading...'}</p>
-                                </div>
-                                <div className="grid grid-cols-2 gap-3">
-                                    <div className="p-3 bg-white/5 rounded-xl">
-                                        <p className="text-[10px] font-bold text-slate-500 uppercase mb-1">API Key</p>
-                                        <p className="text-violet-400 font-bold">#{(data.systemStatus?.api?.current_key_index || 0) + 1}</p>
-                                    </div>
-                                    <div className="p-3 bg-white/5 rounded-xl">
-                                        <p className="text-[10px] font-bold text-slate-500 uppercase mb-1">Failed Combos</p>
-                                        <p className="text-amber-400 font-bold">{data.systemStatus?.api?.failed_combinations || 0}/{data.systemStatus?.api?.total_combinations || 0}</p>
-                                    </div>
-                                </div>
-                                <div className="p-4 bg-white/5 rounded-xl">
-                                    <div className="flex items-center justify-between mb-2">
-                                        <p className="text-[10px] font-bold text-slate-500 uppercase">Persona Instruction</p>
-                                        <button onClick={() => { setInstructionText(data.customInstruction?.instruction || ''); setShowInstructionEditor(true); }} className="text-[10px] text-violet-400 hover:text-violet-300">Edit</button>
-                                    </div>
-                                    <p className="text-white font-medium text-sm">{data.customInstruction?.name || 'Default Persona'}</p>
-                                    {data.customInstruction?.is_custom && <span className="text-[9px] bg-violet-500/20 text-violet-400 px-2 py-0.5 rounded mt-2 inline-block">Custom Override</span>}
-                                </div>
-                            </div>
-                        </div>
+                    {/* Tabs */}
+                    <div className="flex flex-wrap gap-2 mb-6 p-2 glass rounded-xl overflow-x-auto">
+                        <Tab active={tab === 'overview'} icon="layout-dashboard" label="Overview" onClick={() => setTab('overview')} />
+                        <Tab active={tab === 'memories'} icon="brain" label="Memories" onClick={() => setTab('memories')} badge={data.memories.length} />
+                        <Tab active={tab === 'schedules'} icon="calendar" label="Schedules" onClick={() => setTab('schedules')} badge={data.schedules.length} />
+                        <Tab active={tab === 'chatlogs'} icon="message-circle" label="Chat Logs" onClick={() => setTab('chatlogs')} badge={data.chatLogs.length} />
+                        <Tab active={tab === 'knowledge'} icon="share-2" label="Knowledge" onClick={() => setTab('knowledge')} />
+                        <Tab active={tab === 'personas'} icon="sparkles" label="Personas" onClick={() => setTab('personas')} />
+                        <Tab active={tab === 'settings'} icon="settings" label="Settings" onClick={() => setTab('settings')} />
+                        <Tab active={tab === 'profile'} icon="user" label="Profile" onClick={() => setTab('profile')} />
                     </div>
 
-                    {/* Custom Instruction Modal */}
-                    {showInstructionEditor && (
-                        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
-                            <div className="glass rounded-2xl p-6 w-full max-w-2xl max-h-[80vh] overflow-y-auto">
-                                <div className="flex items-center justify-between mb-4">
-                                    <h3 className="text-lg font-bold text-white">Edit Persona Instruction</h3>
-                                    <button onClick={() => setShowInstructionEditor(false)} className="text-slate-400 hover:text-white"><Icon name="x" /></button>
-                                </div>
-                                <textarea
-                                    value={instructionText}
-                                    onChange={(e) => setInstructionText(e.target.value)}
-                                    className="w-full h-64 bg-white/5 border border-white/10 rounded-xl p-4 text-slate-200 text-sm mono focus:outline-none focus:border-violet-500"
-                                    placeholder="Enter custom instruction for Vira's persona..."
-                                />
-                                <div className="flex justify-end gap-3 mt-4">
-                                    <button onClick={resetInstruction} className="px-4 py-2 rounded-xl bg-slate-700 text-slate-300 hover:bg-slate-600 text-sm font-medium">Reset to Default</button>
-                                    <button onClick={updateInstruction} className="px-4 py-2 rounded-xl bg-violet-600 text-white hover:bg-violet-500 text-sm font-bold">Save Override</button>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Main Content Layout */}
-                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-
-                        {/* Sidebar Column */}
-                        <div className="lg:col-span-4 space-y-6">
-                            <MoodComponent mood={data.emotional.mood} satisfaction={data.emotional.satisfaction} />
-
-                            <div className="glass rounded-2xl p-6 space-y-5">
-                                <div className="flex items-center gap-2">
-                                    <Icon name="user" className="text-violet-400" />
-                                    <h2 className="text-sm font-bold uppercase tracking-widest text-slate-400">Admin Profile</h2>
-                                </div>
+                    {/* Content */}
+                    <div className="glass rounded-2xl p-6">
+                        {tab === 'overview' && (
+                            <div className="grid lg:grid-cols-2 gap-6">
+                                <NeuralPanel events={data.neuralEvents} moduleStates={data.moduleStates} activities={data.activities} />
                                 <div className="space-y-4">
-                                    <div className="p-4 bg-white/5 rounded-2xl border border-white/5 hover:border-white/10 transition-all">
-                                        <p className="text-[10px] font-bold text-slate-500 uppercase mb-1">Telegram Identity</p>
-                                        <p className="text-white font-bold text-lg">@{data.profile.telegram_name || 'vira_user'}</p>
-                                    </div>
+                                    <h3 className="text-sm font-bold text-slate-400 uppercase">System Status</h3>
                                     <div className="grid grid-cols-2 gap-3">
-                                        <div className="p-3 bg-white/5 rounded-xl">
-                                            <p className="text-[10px] font-bold text-slate-500 uppercase mb-1">Full Name</p>
-                                            <p className="text-white font-semibold text-sm">{data.profile.full_name || 'Anonym'}</p>
-                                        </div>
-                                        <div className="p-3 bg-white/5 rounded-xl">
-                                            <p className="text-[10px] font-bold text-slate-500 uppercase mb-1">Auth Level</p>
-                                            <p className="text-violet-400 font-bold text-sm">System Admin</p>
-                                        </div>
-                                    </div>
-                                    {data.profile.additional_info && (
-                                        <p className="text-xs text-slate-400 bg-white/5 p-3 rounded-xl leading-relaxed italic border-l-2 border-violet-500">
-                                            "{data.profile.additional_info}"
-                                        </p>
-                                    )}
-                                </div>
-                            </div>
-                        </div>
-
-                        {/* Middle/Primary Column */}
-                        <div className="lg:col-span-8 space-y-6">
-
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                {/* Memories Feed */}
-                                <div className="glass rounded-2xl overflow-hidden flex flex-col h-[420px]">
-                                    <div className="p-5 border-b border-white/5 flex justify-between items-center bg-white/[0.02]">
-                                        <div className="flex items-center gap-2 text-violet-400 font-bold">
-                                            <Icon name="message-square" />
-                                            <span className="text-sm uppercase tracking-widest">Ingatan Terbaru</span>
-                                        </div>
-                                        <span className="text-[10px] bg-white/5 text-slate-400 px-2 py-1 rounded">Feed</span>
-                                    </div>
-                                    <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
-                                        {data.memories.length > 0 ? data.memories.map((m, i) => (
-                                            <div key={i} className="group p-4 bg-white/5 hover:bg-white/[0.08] border border-white/5 rounded-2xl transition-all">
-                                                <div className="flex justify-between items-start mb-2">
-                                                    <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded tracking-tighter ${m.memory_type === 'fact' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-blue-500/10 text-blue-400'
-                                                        }`}>
-                                                        {m.memory_type}
-                                                    </span>
-                                                    <span className="text-[10px] text-slate-500 mono">{m.created_at?.split(' ')[1] || 'Today'}</span>
-                                                </div>
-                                                <p className="text-sm text-slate-200 leading-relaxed font-medium line-clamp-2 group-hover:line-clamp-none transition-all">
-                                                    {m.summary}
-                                                </p>
-                                            </div>
-                                        )) : (
-                                            <div className="flex flex-col items-center justify-center h-full text-slate-600 opacity-50 space-y-2">
-                                                <Icon name="inbox" size={40} />
-                                                <p className="text-sm font-medium italic">Belum ada memori terfragmen</p>
-                                            </div>
-                                        )}
-                                    </div>
-                                </div>
-
-                                {/* Knowledge Triples */}
-                                <div className="glass rounded-2xl overflow-hidden flex flex-col h-[420px]">
-                                    <div className="p-5 border-b border-white/5 flex justify-between items-center bg-white/[0.02]">
-                                        <div className="flex items-center gap-2 text-emerald-400 font-bold">
-                                            <Icon name="network" />
-                                            <span className="text-sm uppercase tracking-widest text-slate-400">Knowledge Graph</span>
-                                        </div>
-                                    </div>
-                                    <div className="flex-1 overflow-y-auto p-4 space-y-2 custom-scrollbar">
-                                        {data.triples.length > 0 ? data.triples.map((t, i) => (
-                                            <KnowledgeTriple key={i} t={t} />
-                                        )) : (
-                                            <div className="flex flex-col items-center justify-center h-full text-slate-600 opacity-50 space-y-2">
-                                                <Icon name="git-branch" size={40} />
-                                                <p className="text-sm font-medium italic">Graf pengetahuan kosong</p>
-                                            </div>
-                                        )}
+                                        <div className="p-4 bg-white/5 rounded-xl"><p className="text-[10px] text-slate-400 uppercase mb-1">Status</p><p className="text-lg font-bold text-emerald-400">{data.system?.status || 'Unknown'}</p></div>
+                                        <div className="p-4 bg-white/5 rounded-xl"><p className="text-[10px] text-slate-400 uppercase mb-1">Database</p><p className="text-lg font-bold text-violet-400">{data.system?.database || 'MongoDB'}</p></div>
+                                        <div className="p-4 bg-white/5 rounded-xl"><p className="text-[10px] text-slate-400 uppercase mb-1">Model</p><p className="text-sm font-bold text-white mono">{data.system?.api?.current_model?.split('/').pop() || 'N/A'}</p></div>
+                                        <div className="p-4 bg-white/5 rounded-xl"><p className="text-[10px] text-slate-400 uppercase mb-1">Persona</p><p className="text-sm font-bold text-white">{data.personas.find(p => p.is_active)?.name || 'Default'}</p></div>
                                     </div>
                                 </div>
                             </div>
-
-                            {/* Horizontal Schedules List */}
-                            <div className="glass rounded-2xl overflow-hidden">
-                                <div className="p-5 border-b border-white/5 flex items-center gap-2 text-amber-400 font-bold bg-white/[0.02]">
-                                    <Icon name="clock" />
-                                    <span className="text-sm uppercase tracking-widest text-slate-400">Jadwal Mendatang</span>
-                                </div>
-                                <div className="p-5 overflow-x-auto">
-                                    <div className="flex gap-4 min-w-max">
-                                        {data.schedules.length > 0 ? data.schedules.map((s, i) => (
-                                            <div key={i} className="w-64 p-4 bg-white/5 border border-white/5 rounded-2xl hover:bg-white/[0.08] transition-all">
-                                                <div className="flex justify-between items-start mb-3">
-                                                    <div className="p-2 bg-amber-500/10 rounded-lg text-amber-500">
-                                                        <Icon name="calendar" size={16} />
-                                                    </div>
-                                                    <span className="text-[10px] font-bold text-slate-500 bg-white/5 px-2 py-0.5 rounded">{s.status}</span>
-                                                </div>
-                                                <p className="text-sm font-bold text-white mb-2 line-clamp-1">{s.context}</p>
-                                                <p className="text-[11px] text-slate-400 mono flex items-center gap-1.5">
-                                                    <Icon name="bell" size={10} />
-                                                    {s.scheduled_at}
-                                                </p>
-                                            </div>
-                                        )) : (
-                                            <p className="text-sm text-slate-500 italic p-4 text-center w-full">Tidak ada agenda tertunda.</p>
-                                        )}
-                                    </div>
-                                </div>
-                            </div>
-
-                        </div>
+                        )}
+                        {tab === 'memories' && <MemoriesPanel data={data.memories} refresh={refresh} />}
+                        {tab === 'schedules' && <SchedulesPanel data={data.schedules} refresh={refresh} />}
+                        {tab === 'chatlogs' && <ChatLogsPanel data={data.chatLogs} refresh={refresh} />}
+                        {tab === 'knowledge' && <KnowledgePanel triples={data.triples} entities={data.entities} />}
+                        {tab === 'personas' && <PersonasPanel data={data.personas} refresh={refresh} />}
+                        {tab === 'settings' && <SettingsPanel instruction={data.instruction} system={data.system} refresh={refresh} />}
+                        {tab === 'profile' && <ProfilePanel profile={data.profile} emotional={data.emotional} refresh={refresh} />}
                     </div>
 
-                    {/* Footer */}
-                    <footer className="text-center pt-8 pb-4">
-                        <p className="text-[10px] font-bold text-slate-600 uppercase tracking-[0.2em]">
-                            End-to-End Neural Processing Encryption Enabled • <span className="text-violet-500/50">SECURED BY VIRA AI</span>
-                        </p>
-                    </footer>
+                    <footer className="mt-6 text-center text-xs text-slate-500">Vira Personal Life OS • Real-Time Dashboard • MongoDB Edition</footer>
                 </div>
             );
         };
 
-        const container = document.getElementById('root');
-        const root = ReactDOM.createRoot(container);
-        root.render(<App />);
+        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
     </script>
 </body>
 

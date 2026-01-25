@@ -6,7 +6,7 @@ from enum import Enum
 
 from pydantic import BaseModel, Field
 
-from src.brainstem import MoodState
+from src.brainstem import MoodState, NeuralEventBus
 
 
 class EmotionType(str, Enum):
@@ -133,6 +133,7 @@ class Amygdala:
                 self._state.mood_history = saved.get("history", [])
 
     async def save_state(self) -> None:
+        await NeuralEventBus.emit("amygdala", "hippocampus", f"save_emotion:{self.mood.value}")
         if self._hippocampus:
             await self._hippocampus.save_emotional_state(
                 mood=self._state.current_mood.value,

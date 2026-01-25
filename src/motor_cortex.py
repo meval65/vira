@@ -6,7 +6,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode, ChatAction
 from telegram.ext import ContextTypes
 
-from src.brainstem import ADMIN_ID
+from src.brainstem import ADMIN_ID, NeuralEventBus
 
 
 def get_brain_from_context(context: ContextTypes.DEFAULT_TYPE):
@@ -175,6 +175,16 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await cmd_status(update, context)
 
 
+async def _keep_typing(bot, chat_id: int):
+    """Keeps sending typing action every 4 seconds."""
+    try:
+        while True:
+            await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+            await asyncio.sleep(4)
+    except asyncio.CancelledError:
+        pass
+
+
 async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_admin(update.effective_user.id):
         return
@@ -193,23 +203,16 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         if img_path is None and not text_input:
             return
 
-    # Handle voice messages and audio files
-    if update.message.voice or update.message.audio:
-        transcript = await _handle_audio(update, user_dir)
-        if transcript:
-            text_input = transcript if not text_input else f"{text_input}\n\n[AUDIO TRANSCRIPT]:\n{transcript}"
-
     if not text_input and not img_path:
         return
 
-    await context.bot.send_chat_action(
-        chat_id=update.effective_chat.id,
-        action=ChatAction.TYPING
-    )
+    # Start persistent typing status
+    typing_task = asyncio.create_task(_keep_typing(context.bot, update.effective_chat.id))
 
     brain = get_brain_from_context(context)
 
     if not brain or not brain.prefrontal_cortex:
+        typing_task.cancel()
         await update.message.reply_text(
             "⚠️ Sistem belum siap. Restart bot dengan /start",
             parse_mode=None
@@ -223,20 +226,24 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             user_name=update.effective_user.first_name
         )
 
+        typing_task.cancel() # Stop typing before sending response
+
         if response and response != "ERROR":
             await _send_chunked_response(update, response)
         else:
+            print("❌ Processing failed silently (response was ERROR or None)")
             await update.message.reply_text(
-                "😵 Maaf, terjadi kesalahan\\. Silakan coba lagi\\.",
-                parse_mode=ParseMode.MARKDOWN_V2
+                "⏳ Mohon tunggu sebentar, sistem sedang menyesuaikan diri...",
+                parse_mode=None
             )
     except Exception as e:
+        typing_task.cancel()
         import traceback
         traceback.print_exc()
         print(f"❌ Handler Error: {e}")
         await update.message.reply_text(
-            "😵 Terjadi error pada sistem\\.",
-            parse_mode=ParseMode.MARKDOWN_V2
+            "⏳ Mohon tunggu sebentar...",
+            parse_mode=None
         )
     finally:
         if img_path and os.path.exists(img_path):
@@ -273,166 +280,4 @@ async def _send_chunked_response(update: Update, text: str) -> None:
 
         if text:
             await asyncio.sleep(0.5)
-
-
-async def _handle_document(update: Update, user_dir: str, text_input: str) -> str:
-    import uuid
-
-    MAX_FILE_SIZE = 5 * 1024 * 1024
-    ALLOWED_EXTENSIONS = {
-        '.txt', '.md', '.py', '.json', '.csv', '.html',
-        '.js', '.css', '.xml', '.yaml', '.yml', '.log', '.ini'
-    }
-
-    doc = update.message.document
-    fname = doc.file_name or "file.txt"
-    ext = os.path.splitext(fname)[1].lower()
-
-    if ext not in ALLOWED_EXTENSIONS:
-        await update.message.reply_text(
-            f"❌ Format file tidak didukung\\.",
-            parse_mode=ParseMode.MARKDOWN_V2
-        )
-        return text_input if text_input else None
-
-    if doc.file_size > MAX_FILE_SIZE:
-        await update.message.reply_text(
-            f"❌ File terlalu besar\\. Maksimal 5 MB",
-            parse_mode=ParseMode.MARKDOWN_V2
-        )
-        return text_input if text_input else None
-
-    os.makedirs(user_dir, exist_ok=True)
-
-    try:
-        f_obj = await doc.get_file()
-        tmp = os.path.join(user_dir, f"tmp_{uuid.uuid4().hex[:8]}{ext}")
-        await f_obj.download_to_drive(tmp)
-
-        content = await _read_file_content(tmp)
-        text_input += f"\n\n[FILE: {fname}]\n{content}\n[END FILE]"
-
-        if os.path.exists(tmp):
-            os.remove(tmp)
-
-        return text_input
-    except Exception:
-        await update.message.reply_text("❌ Gagal memproses file")
-        return None
-
-
-async def _handle_photo(update: Update, user_dir: str) -> str:
-    import uuid
-    os.makedirs(user_dir, exist_ok=True)
-
-    try:
-        p_obj = await update.message.photo[-1].get_file()
-        img_path = os.path.join(user_dir, f"img_{uuid.uuid4().hex[:8]}.jpg")
-        await p_obj.download_to_drive(img_path)
-        return img_path
-    except Exception:
-        await update.message.reply_text("❌ Gagal memproses foto")
-        return None
-
-
-async def _read_file_content(file_path: str) -> str:
-    MAX_FILE_SIZE = 5 * 1024 * 1024
-
-    try:
-        if os.path.getsize(file_path) > MAX_FILE_SIZE:
-            return "[... File too large ...]"
-
-        with open(file_path, 'rb') as f:
-            raw_data = f.read()
-
-        for encoding in ['utf-8', 'latin-1', 'ascii']:
-            try:
-                return raw_data.decode(encoding)
-            except UnicodeDecodeError:
-                continue
-
-        return raw_data.decode('ascii', errors='ignore')
-    except Exception:
-        return "[Error reading file]"
-
-
-async def _handle_audio(update, user_dir: str) -> str:
-    """Handle voice messages and audio files via Whisper transcription."""
-    import uuid
-    import httpx
-
-    os.makedirs(user_dir, exist_ok=True)
-
-    try:
-        # Get the audio file
-        if update.message.voice:
-            audio = update.message.voice
-            ext = ".ogg"
-        else:
-            audio = update.message.audio
-            ext = os.path.splitext(audio.file_name or ".mp3")[1] or ".mp3"
-
-        file_obj = await audio.get_file()
-        audio_path = os.path.join(user_dir, f"audio_{uuid.uuid4().hex[:8]}{ext}")
-        await file_obj.download_to_drive(audio_path)
-
-        # Transcribe via Ollama Whisper or fallback
-        transcript = await _transcribe_audio(audio_path)
-
-        # Cleanup
-        if os.path.exists(audio_path):
-            os.remove(audio_path)
-
-        if transcript:
-            await update.message.reply_text(
-                f"🎤 *Audio diterima*\\. Memproses transkripsi\\.\\.\\.",
-                parse_mode="MarkdownV2"
-            )
-            return transcript
-        else:
-            await update.message.reply_text(
-                "⚠️ Gagal mentranskrip audio\\. Whisper tidak tersedia\\.",
-                parse_mode="MarkdownV2"
-            )
-            return None
-
-    except Exception as e:
-        print(f"Audio handling error: {e}")
-        await update.message.reply_text("❌ Gagal memproses audio")
-        return None
-
-
-async def _transcribe_audio(audio_path: str) -> str:
-    """Transcribe audio using Ollama Whisper or local Whisper."""
-    import httpx
-    from src.brainstem import OLLAMA_BASE_URL
-
-    try:
-        # Try Ollama Whisper API
-        ollama_url = OLLAMA_BASE_URL.replace("/v1", "")
-
-        with open(audio_path, 'rb') as f:
-            audio_data = f.read()
-
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            # Check if whisper model is available
-            resp = await client.post(
-                f"{ollama_url}/api/generate",
-                json={
-                    "model": "whisper",
-                    "prompt": "Transcribe this audio to text",
-                    "stream": False
-                },
-                files={"audio": audio_data}
-            )
-
-            if resp.status_code == 200:
-                data = resp.json()
-                return data.get("response", "")
-
-    except Exception as e:
-        print(f"Whisper transcription failed: {e}")
-
-    # Fallback: Return placeholder if Whisper not available
-    return "[Audio received - Whisper transcription not available. Install with: ollama pull whisper]"
 

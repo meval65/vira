@@ -1,26 +1,40 @@
+"""
+Hippocampus Module - Memory and Knowledge Graph Management for Vira.
+
+This module handles all memory operations including:
+- Long-term memory storage and retrieval
+- Knowledge graph (triple store) management
+- Admin profile management
+- Schedule management
+- Persona management
+
+Refactored to use MongoDB instead of SQLite for better scalability
+and native document storage for embeddings.
+"""
+
 import os
 import uuid
 import json
 import hashlib
-import asyncio
 import numpy as np
-import aiosqlite
-import sqlite3
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional, Tuple, Any
+from typing import List, Dict, Optional, Any
 from collections import defaultdict
 from enum import Enum
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 
 from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
+from bson import ObjectId
 
 from src.brainstem import (
-    DB_PATH, GOOGLE_API_KEY, TIER_2_MODEL, TIER_3_MODEL,
+    GOOGLE_API_KEY, TIER_2_MODEL, TIER_3_MODEL,
     MemoryType, MAX_RETRIEVED_MEMORIES, MIN_RELEVANCE_SCORE,
-    DECAY_DAYS_EMOTION, DECAY_DAYS_GENERAL, CANONICALIZATION_INSTRUCTION
+    DECAY_DAYS_EMOTION, DECAY_DAYS_GENERAL, CANONICALIZATION_INSTRUCTION,
+    NeuralEventBus
 )
+from src.db.mongo_client import get_mongo_client, MongoDBClient
 
 
 class TripleRelation(str, Enum):
@@ -56,7 +70,7 @@ class Memory:
 
 @dataclass
 class Triple:
-    id: Optional[int]
+    id: Optional[str]
     subject: str
     predicate: str
     object: str
@@ -75,188 +89,57 @@ class AdminProfile(BaseModel):
 
 
 class Hippocampus:
+    """
+    Memory management system using MongoDB.
+    
+    Handles long-term memory storage, knowledge graph operations,
+    and semantic search using NumPy for local vector similarity.
+    """
+    
     SIMILARITY_THRESHOLD: float = 0.90
     ARCHIVE_CHECK_DAYS: int = 90
     MIN_CONFIDENCE: float = 0.3
 
-    def __init__(self, db_path: str = DB_PATH):
-        self.db_path = db_path
-        self._conn: Optional[aiosqlite.Connection] = None
+    def __init__(self):
+        self._mongo: Optional[MongoDBClient] = None
         self._admin_profile: AdminProfile = AdminProfile()
-        self._embedding_cache: Dict[int, np.ndarray] = {}
-        self._embedding_dim: Optional[int] = None
+        self._embedding_cache: Dict[str, np.ndarray] = {}
         self._genai_client = None
         self._evolution_history: Dict[str, List[Dict]] = defaultdict(list)
         self._conflict_history: Dict[str, List[Dict]] = defaultdict(list)
 
     async def initialize(self) -> None:
-        directory = os.path.dirname(self.db_path)
-        if directory and not os.path.exists(directory):
-            os.makedirs(directory, exist_ok=True)
-
-        self._conn = await aiosqlite.connect(
-            self.db_path,
-            timeout=60.0,
-            detect_types=sqlite3.PARSE_DECLTYPES
-        )
-        self._conn.row_factory = aiosqlite.Row
-
-        await self._tune_database()
-        await self._create_tables()
-        await self._create_indexes()
-        await self._load_admin_profile()
-
+        """Initialize MongoDB connection and load admin profile."""
+        self._mongo = get_mongo_client()
+        await self._mongo.connect()
+        
         if GOOGLE_API_KEY:
             self._genai_client = genai.Client(api_key=GOOGLE_API_KEY)
-
-    async def _tune_database(self) -> None:
-        await self._conn.execute("PRAGMA journal_mode=WAL;")
-        await self._conn.executescript("""
-            PRAGMA synchronous=NORMAL;
-            PRAGMA cache_size=-64000;
-            PRAGMA temp_store=MEMORY;
-            PRAGMA mmap_size=268435456;
-            PRAGMA page_size=4096;
-            PRAGMA foreign_keys=ON;
-        """)
-        await self._conn.commit()
-
-    async def _create_tables(self) -> None:
-        await self._conn.executescript("""
-            CREATE TABLE IF NOT EXISTS memories (
-                id TEXT PRIMARY KEY,
-                summary TEXT NOT NULL,
-                memory_type TEXT NOT NULL,
-                priority REAL DEFAULT 0.5,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                last_used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                use_count INTEGER DEFAULT 0,
-                status TEXT DEFAULT 'active',
-                embedding BLOB,
-                metadata TEXT,
-                cluster_id TEXT,
-                fingerprint TEXT,
-                entity TEXT,
-                relation TEXT,
-                value TEXT,
-                confidence REAL DEFAULT 0.5,
-                source_count INTEGER DEFAULT 1,
-                CHECK(priority >= 0.0 AND priority <= 1.0),
-                CHECK(confidence >= 0.0 AND confidence <= 1.0),
-                CHECK(status IN ('active', 'archived', 'deleted'))
-            );
-
-            CREATE TABLE IF NOT EXISTS triples (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                subject TEXT NOT NULL,
-                predicate TEXT NOT NULL,
-                object TEXT NOT NULL,
-                confidence REAL DEFAULT 0.8,
-                source_memory_id TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                access_count INTEGER DEFAULT 0,
-                metadata TEXT,
-                UNIQUE(subject, predicate, object)
-            );
-
-            CREATE TABLE IF NOT EXISTS entities (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT UNIQUE NOT NULL,
-                entity_type TEXT DEFAULT 'unknown',
-                aliases TEXT,
-                properties TEXT,
-                first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                mention_count INTEGER DEFAULT 1
-            );
-
-            CREATE TABLE IF NOT EXISTS admin_profile (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                telegram_name TEXT,
-                full_name TEXT,
-                additional_info TEXT,
-                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-
-            CREATE TABLE IF NOT EXISTS schedules (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                scheduled_at TIMESTAMP NOT NULL,
-                context TEXT NOT NULL,
-                priority INTEGER DEFAULT 0,
-                status TEXT DEFAULT 'pending',
-                recurrence TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                executed_at TIMESTAMP,
-                execution_note TEXT,
-                metadata TEXT,
-                CHECK(status IN ('pending', 'executed', 'cancelled', 'failed'))
-            );
-
-            CREATE TABLE IF NOT EXISTS memory_evolution_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                memory_id TEXT NOT NULL,
-                action TEXT NOT NULL,
-                fingerprint TEXT,
-                old_value TEXT,
-                new_value TEXT,
-                confidence_before REAL,
-                confidence_after REAL,
-                update_type TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-
-            CREATE TABLE IF NOT EXISTS emotional_state (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                current_mood TEXT DEFAULT 'neutral',
-                empathy_level REAL DEFAULT 0.5,
-                satisfaction_level REAL DEFAULT 0.0,
-                last_interaction TIMESTAMP,
-                mood_history TEXT,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-        await self._conn.commit()
-
-    async def _create_indexes(self) -> None:
-        indexes = [
-            "CREATE INDEX IF NOT EXISTS idx_memories_status ON memories(status, memory_type)",
-            "CREATE INDEX IF NOT EXISTS idx_memories_priority ON memories(priority DESC, last_used_at DESC)",
-            "CREATE INDEX IF NOT EXISTS idx_memories_fingerprint ON memories(fingerprint) WHERE fingerprint IS NOT NULL",
-            "CREATE INDEX IF NOT EXISTS idx_memories_entity ON memories(entity) WHERE entity IS NOT NULL",
-            "CREATE INDEX IF NOT EXISTS idx_triples_subject ON triples(subject)",
-            "CREATE INDEX IF NOT EXISTS idx_triples_object ON triples(object)",
-            "CREATE INDEX IF NOT EXISTS idx_triples_predicate ON triples(predicate)",
-            "CREATE INDEX IF NOT EXISTS idx_schedules_pending ON schedules(status, scheduled_at)",
-            "CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name)"
-        ]
-        for sql in indexes:
-            try:
-                await self._conn.execute(sql)
-            except Exception:
-                pass
-        await self._conn.commit()
-
-    async def _load_admin_profile(self) -> None:
-        row = await self._conn.execute_fetchall(
-            "SELECT telegram_name, full_name, additional_info, last_updated FROM admin_profile WHERE id = 1"
-        )
-        if row:
-            r = row[0]
-            self._admin_profile = AdminProfile(
-                telegram_name=r[0],
-                full_name=r[1],
-                additional_info=r[2],
-                last_updated=r[3] if r[3] else datetime.now()
-            )
+        
+        await self._load_admin_profile()
 
     async def close(self) -> None:
-        if self._conn:
-            await self._conn.close()
-            self._conn = None
+        """Close MongoDB connection."""
+        if self._mongo:
+            await self._mongo.close()
+            self._mongo = None
 
     @property
     def admin_profile(self) -> AdminProfile:
         return self._admin_profile
+
+    # ==================== ADMIN PROFILE ====================
+
+    async def _load_admin_profile(self) -> None:
+        """Load admin profile from MongoDB."""
+        doc = await self._mongo.admin_profile.find_one({"_id": "admin"})
+        if doc:
+            self._admin_profile = AdminProfile(
+                telegram_name=doc.get("telegram_name"),
+                full_name=doc.get("full_name"),
+                additional_info=doc.get("additional_info"),
+                last_updated=doc.get("last_updated", datetime.now())
+            )
 
     async def update_admin_profile(
         self,
@@ -264,24 +147,27 @@ class Hippocampus:
         full_name: Optional[str] = None,
         additional_info: Optional[str] = None
     ) -> None:
+        """Update admin profile in MongoDB."""
+        update_fields = {"last_updated": datetime.now()}
         if telegram_name:
+            update_fields["telegram_name"] = telegram_name
             self._admin_profile.telegram_name = telegram_name
         if full_name:
+            update_fields["full_name"] = full_name
             self._admin_profile.full_name = full_name
         if additional_info:
+            update_fields["additional_info"] = additional_info
             self._admin_profile.additional_info = additional_info
-        self._admin_profile.last_updated = datetime.now()
+        
+        self._admin_profile.last_updated = update_fields["last_updated"]
+        
+        await self._mongo.admin_profile.update_one(
+            {"_id": "admin"},
+            {"$set": update_fields},
+            upsert=True
+        )
 
-        await self._conn.execute("""
-            INSERT INTO admin_profile (id, telegram_name, full_name, additional_info, last_updated)
-            VALUES (1, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                telegram_name=COALESCE(excluded.telegram_name, telegram_name),
-                full_name=COALESCE(excluded.full_name, full_name),
-                additional_info=COALESCE(excluded.additional_info, additional_info),
-                last_updated=excluded.last_updated
-        """, (telegram_name, full_name, additional_info, datetime.now()))
-        await self._conn.commit()
+    # ==================== MEMORY OPERATIONS ====================
 
     async def store(
         self,
@@ -290,43 +176,48 @@ class Hippocampus:
         priority: float = 0.5,
         embedding: Optional[List[float]] = None
     ) -> str:
+        """Store a new memory or merge with existing one."""
+        await NeuralEventBus.set_activity("hippocampus", f"Storing {memory_type}")
+        await NeuralEventBus.emit("hippocampus", "hippocampus", f"store_memory:{memory_type}")
+        
         canonical = await self._canonicalize(summary, memory_type)
-
         fingerprint = canonical.get("fingerprint")
+        
+        # Check for existing memory with same fingerprint
         if fingerprint:
             existing = await self._find_by_fingerprint(fingerprint)
             if existing:
                 merged = await self._merge_memories(existing, canonical)
-                await self._update_memory(existing["id"], merged)
+                await self._update_memory(existing["_id"], merged)
                 self._record_evolution(fingerprint, existing.get("summary"), summary, "merge")
-                return existing["id"]
-
+                await NeuralEventBus.clear_activity("hippocampus")
+                return str(existing["_id"])
+        
+        # Create new memory
         memory_id = str(uuid.uuid4())
-        emb_blob = None
-        if embedding:
-            emb_array = np.array(embedding, dtype=np.float32)
-            emb_blob = emb_array.tobytes()
-
-        await self._conn.execute("""
-            INSERT INTO memories (id, summary, memory_type, priority, embedding, fingerprint, entity, relation, value, confidence)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            memory_id,
-            summary,
-            memory_type,
-            priority,
-            emb_blob,
-            canonical.get("fingerprint"),
-            canonical.get("entity"),
-            canonical.get("relation"),
-            json.dumps(canonical.get("value")) if canonical.get("value") else None,
-            canonical.get("confidence", 0.5)
-        ))
-        await self._conn.commit()
-
+        doc = {
+            "_id": memory_id,
+            "summary": summary,
+            "type": memory_type,
+            "priority": priority,
+            "embedding": embedding,  # Store as array directly
+            "fingerprint": canonical.get("fingerprint"),
+            "entity": canonical.get("entity"),
+            "relation": canonical.get("relation"),
+            "value": canonical.get("value"),
+            "confidence": canonical.get("confidence", 0.5),
+            "created_at": datetime.now(),
+            "last_used": datetime.now(),
+            "use_count": 0,
+            "status": "active"
+        }
+        
+        await self._mongo.memories.insert_one(doc)
+        
         if fingerprint:
             self._record_evolution(fingerprint, None, summary, "create")
-
+        
+        await NeuralEventBus.clear_activity("hippocampus")
         return memory_id
 
     async def recall(
@@ -335,45 +226,48 @@ class Hippocampus:
         limit: int = MAX_RETRIEVED_MEMORIES,
         query_embedding: Optional[List[float]] = None
     ) -> List[Memory]:
-        rows = await self._conn.execute_fetchall("""
-            SELECT id, summary, memory_type, priority, confidence, fingerprint, 
-                   entity, relation, value, embedding, use_count, created_at, last_used_at, status
-            FROM memories
-            WHERE status = 'active'
-            ORDER BY priority DESC, last_used_at DESC
-            LIMIT ?
-        """, (limit * 3,))
-
+        """Retrieve relevant memories using vector similarity."""
+        await NeuralEventBus.set_activity("hippocampus", "Recalling Memories")
+        await NeuralEventBus.emit("hippocampus", "hippocampus", "recall_memory")
+        
+        # Fetch candidate memories
+        cursor = self._mongo.memories.find(
+            {"status": "active"}
+        ).sort([("priority", -1), ("last_used", -1)]).limit(limit * 3)
+        
+        docs = await cursor.to_list(length=limit * 3)
         memories = []
-        for r in rows:
+        
+        for doc in docs:
             emb = None
-            if r[9]:
+            if doc.get("embedding"):
                 try:
-                    emb = np.frombuffer(r[9], dtype=np.float32)
+                    emb = np.array(doc["embedding"], dtype=np.float32)
                 except Exception:
                     pass
-
+            
             memories.append(Memory(
-                id=r[0],
-                summary=r[1],
-                memory_type=r[2],
-                priority=r[3],
-                confidence=r[4],
-                fingerprint=r[5],
-                entity=r[6],
-                relation=r[7],
-                value=r[8],
+                id=str(doc["_id"]),
+                summary=doc.get("summary", ""),
+                memory_type=doc.get("type", "general"),
+                priority=doc.get("priority", 0.5),
+                confidence=doc.get("confidence", 0.5),
+                fingerprint=doc.get("fingerprint"),
+                entity=doc.get("entity"),
+                relation=doc.get("relation"),
+                value=doc.get("value"),
                 embedding=emb,
-                use_count=r[10],
-                created_at=r[11],
-                last_used_at=r[12],
-                status=r[13]
+                use_count=doc.get("use_count", 0),
+                created_at=doc.get("created_at", datetime.now()),
+                last_used_at=doc.get("last_used", datetime.now()),
+                status=doc.get("status", "active")
             ))
-
+        
+        # Vector similarity search using NumPy
         if query_embedding and memories:
             query_vec = np.array(query_embedding, dtype=np.float32)
             query_norm = query_vec / (np.linalg.norm(query_vec) + 1e-10)
-
+            
             scored = []
             for m in memories:
                 if m.embedding is not None:
@@ -381,48 +275,60 @@ class Hippocampus:
                     sim = float(np.dot(query_norm, m_norm))
                     if sim >= MIN_RELEVANCE_SCORE:
                         scored.append((m, sim))
-
+            
             scored.sort(key=lambda x: x[1], reverse=True)
             memories = [m for m, _ in scored[:limit]]
-
+        
+        # Mark memories as used
         for m in memories[:limit]:
             await self._mark_memory_used(m.id)
-
+        
+        await NeuralEventBus.clear_activity("hippocampus")
         return memories[:limit]
 
     async def query_entity(self, entity: str) -> Dict[str, Any]:
+        """Query knowledge graph for entity relationships."""
         entity_lower = entity.lower().strip()
-
-        outgoing = await self._conn.execute_fetchall("""
-            SELECT id, subject, predicate, object, confidence
-            FROM triples WHERE LOWER(subject) = ?
-            ORDER BY confidence DESC LIMIT 10
-        """, (entity_lower,))
-
-        incoming = await self._conn.execute_fetchall("""
-            SELECT id, subject, predicate, object, confidence
-            FROM triples WHERE LOWER(object) = ?
-            ORDER BY confidence DESC LIMIT 10
-        """, (entity_lower,))
-
-        related_memories = await self._conn.execute_fetchall("""
-            SELECT id, summary, memory_type, confidence
-            FROM memories WHERE LOWER(entity) = ? AND status = 'active'
-            ORDER BY priority DESC LIMIT 5
-        """, (entity_lower,))
-
-        for row in outgoing + incoming:
-            await self._conn.execute(
-                "UPDATE triples SET last_accessed = ?, access_count = access_count + 1 WHERE id = ?",
-                (datetime.now(), row[0])
+        
+        # Outgoing relationships
+        outgoing_cursor = self._mongo.knowledge_graph.find(
+            {"subject": entity_lower}
+        ).sort("confidence", -1).limit(10)
+        outgoing = await outgoing_cursor.to_list(length=10)
+        
+        # Incoming relationships
+        incoming_cursor = self._mongo.knowledge_graph.find(
+            {"object": entity_lower}
+        ).sort("confidence", -1).limit(10)
+        incoming = await incoming_cursor.to_list(length=10)
+        
+        # Related memories
+        memories_cursor = self._mongo.memories.find(
+            {"entity": entity_lower, "status": "active"}
+        ).sort("priority", -1).limit(5)
+        related_memories = await memories_cursor.to_list(length=5)
+        
+        # Update access counts
+        for doc in outgoing + incoming:
+            await self._mongo.knowledge_graph.update_one(
+                {"_id": doc["_id"]},
+                {"$set": {"last_accessed": datetime.now()}, "$inc": {"access_count": 1}}
             )
-        await self._conn.commit()
-
+        
         return {
             "entity": entity,
-            "outgoing": [{"subject": r[1], "predicate": r[2], "object": r[3], "confidence": r[4]} for r in outgoing],
-            "incoming": [{"subject": r[1], "predicate": r[2], "object": r[3], "confidence": r[4]} for r in incoming],
-            "memories": [{"id": r[0], "summary": r[1], "type": r[2], "confidence": r[3]} for r in related_memories]
+            "outgoing": [
+                {"subject": r["subject"], "predicate": r["predicate"], "object": r["object"], "confidence": r.get("confidence", 0.8)}
+                for r in outgoing
+            ],
+            "incoming": [
+                {"subject": r["subject"], "predicate": r["predicate"], "object": r["object"], "confidence": r.get("confidence", 0.8)}
+                for r in incoming
+            ],
+            "memories": [
+                {"id": str(m["_id"]), "summary": m["summary"], "type": m.get("type"), "confidence": m.get("confidence", 0.5)}
+                for m in related_memories
+            ]
         }
 
     async def add_triple(
@@ -432,34 +338,46 @@ class Hippocampus:
         obj: str,
         confidence: float = 0.8,
         source_memory_id: Optional[str] = None
-    ) -> int:
+    ) -> str:
+        """Add a knowledge graph triple."""
+        await NeuralEventBus.emit("hippocampus", "hippocampus", "add_knowledge")
+        
         subject = subject.lower().strip()
         predicate = predicate.lower().strip().replace(" ", "_")
         obj = obj.lower().strip()
-
+        
         await self._ensure_entity(subject)
         await self._ensure_entity(obj)
-
-        existing = await self._conn.execute_fetchall(
-            "SELECT id, confidence FROM triples WHERE subject = ? AND predicate = ? AND object = ?",
-            (subject, predicate, obj)
-        )
-
+        
+        # Check for existing triple
+        existing = await self._mongo.knowledge_graph.find_one({
+            "subject": subject,
+            "predicate": predicate,
+            "object": obj
+        })
+        
         if existing:
-            new_conf = min(1.0, existing[0][1] + 0.1)
-            await self._conn.execute(
-                "UPDATE triples SET confidence = ?, last_accessed = ? WHERE id = ?",
-                (new_conf, datetime.now(), existing[0][0])
+            new_conf = min(1.0, existing.get("confidence", 0.8) + 0.1)
+            await self._mongo.knowledge_graph.update_one(
+                {"_id": existing["_id"]},
+                {"$set": {"confidence": new_conf, "last_accessed": datetime.now()}}
             )
-            await self._conn.commit()
-            return existing[0][0]
-
-        cursor = await self._conn.execute("""
-            INSERT INTO triples (subject, predicate, object, confidence, source_memory_id, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (subject, predicate, obj, confidence, source_memory_id, datetime.now()))
-        await self._conn.commit()
-        return cursor.lastrowid
+            return str(existing["_id"])
+        
+        # Insert new triple
+        triple_id = str(uuid.uuid4())
+        await self._mongo.knowledge_graph.insert_one({
+            "_id": triple_id,
+            "subject": subject,
+            "predicate": predicate,
+            "object": obj,
+            "confidence": confidence,
+            "source_memory_id": source_memory_id,
+            "created_at": datetime.now(),
+            "last_accessed": datetime.now(),
+            "access_count": 0
+        })
+        return triple_id
 
     async def traverse(
         self,
@@ -467,55 +385,50 @@ class Hippocampus:
         max_hops: int = 2,
         min_confidence: float = 0.4
     ) -> Dict[str, List[Triple]]:
+        """Traverse knowledge graph from starting entity."""
         start = start_entity.lower().strip()
         visited = {start}
         result: Dict[str, List[Triple]] = {start: []}
-
+        
         current_level = [start]
         for hop in range(max_hops):
             next_level = []
             for entity in current_level:
-                rows = await self._conn.execute_fetchall("""
-                    SELECT id, subject, predicate, object, confidence, source_memory_id, created_at, last_accessed, access_count
-                    FROM triples
-                    WHERE (LOWER(subject) = ? OR LOWER(object) = ?) AND confidence >= ?
-                """, (entity, entity, min_confidence))
-
-                for r in rows:
+                cursor = self._mongo.knowledge_graph.find({
+                    "$or": [
+                        {"subject": entity},
+                        {"object": entity}
+                    ],
+                    "confidence": {"$gte": min_confidence}
+                })
+                
+                async for doc in cursor:
                     triple = Triple(
-                        id=r[0], subject=r[1], predicate=r[2], object=r[3],
-                        confidence=r[4], source_memory_id=r[5], created_at=r[6],
-                        last_accessed=r[7], access_count=r[8]
+                        id=str(doc["_id"]),
+                        subject=doc["subject"],
+                        predicate=doc["predicate"],
+                        object=doc["object"],
+                        confidence=doc.get("confidence", 0.8),
+                        source_memory_id=doc.get("source_memory_id"),
+                        created_at=doc.get("created_at"),
+                        last_accessed=doc.get("last_accessed"),
+                        access_count=doc.get("access_count", 0)
                     )
+                    
                     if entity not in result:
                         result[entity] = []
                     result[entity].append(triple)
-
-                    neighbor = r[3] if r[1].lower() == entity else r[1]
+                    
+                    neighbor = doc["object"] if doc["subject"].lower() == entity else doc["subject"]
                     if neighbor.lower() not in visited:
                         visited.add(neighbor.lower())
                         next_level.append(neighbor.lower())
-
+            
             current_level = next_level
-
+        
         return result
 
-    async def get_memory_stats(self) -> Dict[str, int]:
-        active = await self._conn.execute_fetchall(
-            "SELECT COUNT(*) FROM memories WHERE status = 'active'"
-        )
-        archived = await self._conn.execute_fetchall(
-            "SELECT COUNT(*) FROM memories WHERE status = 'archived'"
-        )
-        triples = await self._conn.execute_fetchall(
-            "SELECT COUNT(*) FROM triples"
-        )
-
-        return {
-            "active": active[0][0] if active else 0,
-            "archived": archived[0][0] if archived else 0,
-            "triples": triples[0][0] if triples else 0
-        }
+    # ==================== SCHEDULE OPERATIONS ====================
 
     async def add_schedule(
         self,
@@ -523,123 +436,265 @@ class Hippocampus:
         context: str,
         priority: int = 0,
         recurring: Optional[str] = None
-    ) -> int:
-        cursor = await self._conn.execute("""
-            INSERT INTO schedules (scheduled_at, context, priority, recurrence, created_at)
-            VALUES (?, ?, ?, ?, ?)
-        """, (trigger_time, context, priority, recurring, datetime.now()))
-        await self._conn.commit()
-        return cursor.lastrowid
+    ) -> str:
+        """Add a new schedule."""
+        schedule_id = str(uuid.uuid4())
+        await self._mongo.schedules.insert_one({
+            "_id": schedule_id,
+            "scheduled_at": trigger_time,
+            "context": context,
+            "priority": priority,
+            "recurrence": recurring,
+            "status": "pending",
+            "created_at": datetime.now(),
+            "executed_at": None,
+            "execution_note": None
+        })
+        return schedule_id
 
     async def get_pending_schedules(self, limit: int = 10) -> List[Dict]:
-        rows = await self._conn.execute_fetchall("""
-            SELECT id, scheduled_at, context, priority, recurrence
-            FROM schedules
-            WHERE status = 'pending' AND scheduled_at <= ?
-            ORDER BY scheduled_at ASC
-            LIMIT ?
-        """, (datetime.now(), limit))
-
+        """Get pending schedules that are due."""
+        cursor = self._mongo.schedules.find({
+            "status": "pending",
+            "scheduled_at": {"$lte": datetime.now()}
+        }).sort("scheduled_at", 1).limit(limit)
+        
+        docs = await cursor.to_list(length=limit)
         return [
-            {"id": r[0], "scheduled_at": r[1], "context": r[2], "priority": r[3], "recurrence": r[4]}
-            for r in rows
+            {
+                "id": str(d["_id"]),
+                "scheduled_at": d["scheduled_at"],
+                "context": d["context"],
+                "priority": d.get("priority", 0),
+                "recurrence": d.get("recurrence")
+            }
+            for d in docs
         ]
 
     async def get_upcoming_schedules(self, hours_ahead: int = 72) -> List[Dict]:
+        """Get upcoming schedules within specified hours."""
         future = datetime.now() + timedelta(hours=hours_ahead)
-        rows = await self._conn.execute_fetchall("""
-            SELECT id, scheduled_at, context, priority, recurrence
-            FROM schedules
-            WHERE status = 'pending' AND scheduled_at <= ?
-            ORDER BY scheduled_at ASC
-        """, (future,))
-
+        cursor = self._mongo.schedules.find({
+            "status": "pending",
+            "scheduled_at": {"$lte": future}
+        }).sort("scheduled_at", 1)
+        
+        docs = await cursor.to_list(length=50)
         return [
-            {"id": r[0], "scheduled_at": r[1], "context": r[2], "priority": r[3], "recurrence": r[4]}
-            for r in rows
+            {
+                "id": str(d["_id"]),
+                "scheduled_at": d["scheduled_at"],
+                "context": d["context"],
+                "priority": d.get("priority", 0),
+                "recurrence": d.get("recurrence")
+            }
+            for d in docs
         ]
 
-    async def mark_schedule_executed(self, schedule_id: int, note: Optional[str] = None) -> None:
-        await self._conn.execute("""
-            UPDATE schedules SET status = 'executed', executed_at = ?, execution_note = ?
-            WHERE id = ?
-        """, (datetime.now(), note, schedule_id))
-        await self._conn.commit()
+    async def mark_schedule_executed(self, schedule_id: str, note: Optional[str] = None) -> None:
+        """Mark a schedule as executed."""
+        await self._mongo.schedules.update_one(
+            {"_id": schedule_id},
+            {"$set": {
+                "status": "executed",
+                "executed_at": datetime.now(),
+                "execution_note": note
+            }}
+        )
+
+    async def get_failed_schedules(self, limit: int = 10) -> List[Dict]:
+        """Get failed schedules."""
+        cursor = self._mongo.schedules.find(
+            {"status": "failed"}
+        ).sort("scheduled_at", -1).limit(limit)
+        
+        docs = await cursor.to_list(length=limit)
+        return [dict(d) for d in docs]
 
     async def get_schedule_stats(self) -> Dict[str, int]:
-        pending = await self._conn.execute_fetchall(
-            "SELECT COUNT(*) FROM schedules WHERE status = 'pending'"
-        )
-        executed = await self._conn.execute_fetchall(
-            "SELECT COUNT(*) FROM schedules WHERE status = 'executed'"
-        )
+        """Get schedule statistics."""
+        pending = await self._mongo.schedules.count_documents({"status": "pending"})
+        executed = await self._mongo.schedules.count_documents({"status": "executed"})
+        return {"pending": pending, "executed": executed}
 
-        return {
-            "pending": pending[0][0] if pending else 0,
-            "executed": executed[0][0] if executed else 0
-        }
+    # ==================== PERSONA OPERATIONS ====================
 
-    async def _ensure_entity(self, name: str) -> None:
-        name_lower = name.lower().strip()
-        existing = await self._conn.execute_fetchall(
-            "SELECT id FROM entities WHERE LOWER(name) = ?", (name_lower,)
-        )
-        if not existing:
-            await self._conn.execute(
-                "INSERT INTO entities (name) VALUES (?)", (name_lower,)
-            )
-            await self._conn.commit()
-        else:
-            await self._conn.execute(
-                "UPDATE entities SET mention_count = mention_count + 1 WHERE id = ?",
-                (existing[0][0],)
-            )
-            await self._conn.commit()
+    async def get_personas(self) -> List[Dict]:
+        """Get all personas."""
+        cursor = self._mongo.personas.find().sort("name", 1)
+        docs = await cursor.to_list(length=100)
+        return [
+            {
+                "id": str(d["_id"]),
+                "name": d["name"],
+                "instruction": d["instruction"],
+                "temperature": d.get("temperature", 0.7),
+                "is_active": d.get("is_active", False),
+                "created_at": d.get("created_at")
+            }
+            for d in docs
+        ]
 
-    async def _find_by_fingerprint(self, fingerprint: str) -> Optional[Dict]:
-        row = await self._conn.execute_fetchall("""
-            SELECT id, summary, memory_type, priority, confidence, entity, relation, value
-            FROM memories WHERE fingerprint = ? AND status = 'active'
-        """, (fingerprint,))
-
-        if row:
-            r = row[0]
+    async def get_active_persona(self) -> Optional[Dict]:
+        """Get the currently active persona."""
+        doc = await self._mongo.personas.find_one({"is_active": True})
+        if doc:
             return {
-                "id": r[0], "summary": r[1], "memory_type": r[2], "priority": r[3],
-                "confidence": r[4], "entity": r[5], "relation": r[6], "value": r[7]
+                "id": str(doc["_id"]),
+                "name": doc["name"],
+                "instruction": doc["instruction"],
+                "temperature": doc.get("temperature", 0.7),
+                "is_active": True
             }
         return None
 
+    async def create_persona(self, name: str, instruction: str, temperature: float = 0.7) -> str:
+        """Create a new persona."""
+        count = await self._mongo.personas.count_documents({})
+        is_first = count == 0
+        
+        persona_id = str(uuid.uuid4())
+        await self._mongo.personas.insert_one({
+            "_id": persona_id,
+            "name": name,
+            "instruction": instruction,
+            "temperature": temperature,
+            "is_active": is_first,
+            "created_at": datetime.now()
+        })
+        return persona_id
+
+    async def update_persona(self, persona_id: str, data: Dict) -> bool:
+        """Update a persona."""
+        update_fields = {}
+        for k in ["name", "instruction", "temperature"]:
+            if k in data and data[k] is not None:
+                update_fields[k] = data[k]
+        
+        if not update_fields:
+            return False
+        
+        result = await self._mongo.personas.update_one(
+            {"_id": persona_id},
+            {"$set": update_fields}
+        )
+        return result.modified_count > 0
+
+    async def delete_persona(self, persona_id: str) -> bool:
+        """Delete a persona."""
+        doc = await self._mongo.personas.find_one({"_id": persona_id})
+        if not doc:
+            return False
+        
+        if doc.get("is_active"):
+            raise ValueError("Cannot delete active persona")
+        
+        result = await self._mongo.personas.delete_one({"_id": persona_id})
+        return result.deleted_count > 0
+
+    async def set_active_persona(self, persona_id: str) -> bool:
+        """Set a persona as active."""
+        await self._mongo.personas.update_many({}, {"$set": {"is_active": False}})
+        result = await self._mongo.personas.update_one(
+            {"_id": persona_id},
+            {"$set": {"is_active": True}}
+        )
+        return result.modified_count > 0
+
+    # ==================== EMOTIONAL STATE ====================
+
+    async def save_emotional_state(
+        self,
+        mood: str,
+        empathy: float,
+        satisfaction: float,
+        mood_history: List[Dict]
+    ) -> None:
+        """Save emotional state to MongoDB."""
+        await self._mongo.emotional_state.update_one(
+            {"_id": "state"},
+            {"$set": {
+                "current_mood": mood,
+                "empathy_level": empathy,
+                "satisfaction_level": satisfaction,
+                "last_interaction": datetime.now(),
+                "mood_history": mood_history[-10:],
+                "updated_at": datetime.now()
+            }},
+            upsert=True
+        )
+
+    async def load_emotional_state(self) -> Optional[Dict]:
+        """Load emotional state from MongoDB."""
+        doc = await self._mongo.emotional_state.find_one({"_id": "state"})
+        if doc:
+            return {
+                "mood": doc.get("current_mood", "neutral"),
+                "empathy": doc.get("empathy_level", 0.5),
+                "satisfaction": doc.get("satisfaction_level", 0.0),
+                "last_interaction": doc.get("last_interaction"),
+                "history": doc.get("mood_history", [])
+            }
+        return None
+
+    # ==================== STATS ====================
+
+    async def get_memory_stats(self) -> Dict[str, int]:
+        """Get memory statistics."""
+        active = await self._mongo.memories.count_documents({"status": "active"})
+        archived = await self._mongo.memories.count_documents({"status": "archived"})
+        triples = await self._mongo.knowledge_graph.count_documents({})
+        return {"active": active, "archived": archived, "triples": triples}
+
+    # ==================== INTERNAL HELPERS ====================
+
+    async def _ensure_entity(self, name: str) -> None:
+        """Ensure entity exists in entities collection."""
+        name_lower = name.lower().strip()
+        result = await self._mongo.entities.update_one(
+            {"name": name_lower},
+            {
+                "$inc": {"mention_count": 1},
+                "$setOnInsert": {
+                    "entity_type": "unknown",
+                    "first_seen": datetime.now()
+                }
+            },
+            upsert=True
+        )
+
+    async def _find_by_fingerprint(self, fingerprint: str) -> Optional[Dict]:
+        """Find memory by fingerprint."""
+        return await self._mongo.memories.find_one({
+            "fingerprint": fingerprint,
+            "status": "active"
+        })
+
     async def _update_memory(self, memory_id: str, data: Dict) -> None:
-        await self._conn.execute("""
-            UPDATE memories SET
-                summary = ?,
-                priority = ?,
-                confidence = ?,
-                value = ?,
-                last_used_at = ?,
-                use_count = use_count + 1
-            WHERE id = ?
-        """, (
-            data.get("summary"),
-            data.get("priority", 0.5),
-            data.get("confidence", 0.5),
-            json.dumps(data.get("value")) if data.get("value") else None,
-            datetime.now(),
-            memory_id
-        ))
-        await self._conn.commit()
+        """Update an existing memory."""
+        await self._mongo.memories.update_one(
+            {"_id": memory_id},
+            {"$set": {
+                "summary": data.get("summary"),
+                "priority": data.get("priority", 0.5),
+                "confidence": data.get("confidence", 0.5),
+                "value": data.get("value"),
+                "last_used": datetime.now()
+            }, "$inc": {"use_count": 1}}
+        )
 
     async def _mark_memory_used(self, memory_id: str) -> None:
-        await self._conn.execute("""
-            UPDATE memories SET last_used_at = ?, use_count = use_count + 1 WHERE id = ?
-        """, (datetime.now(), memory_id))
-        await self._conn.commit()
+        """Mark a memory as used."""
+        await self._mongo.memories.update_one(
+            {"_id": memory_id},
+            {"$set": {"last_used": datetime.now()}, "$inc": {"use_count": 1}}
+        )
 
     async def _canonicalize(self, summary: str, memory_type: str) -> Dict:
+        """Convert natural language to structured format using LLM."""
         if not self._genai_client:
             return self._fallback_canonicalize(summary, memory_type)
-
+        
         try:
             prompt = f"{CANONICALIZATION_INSTRUCTION}\n\nInput: \"{summary}\""
             response = self._genai_client.models.generate_content(
@@ -656,10 +711,11 @@ class Hippocampus:
             return self._fallback_canonicalize(summary, memory_type)
 
     def _fallback_canonicalize(self, summary: str, memory_type: str) -> Dict:
+        """Fallback canonicalization without LLM."""
         words = summary.lower().split()
         entity = words[-1] if words else "unknown"
         relation = "related_to"
-
+        
         for w in ["likes", "loves", "enjoys", "prefers"]:
             if w in words:
                 relation = "likes"
@@ -672,9 +728,9 @@ class Hippocampus:
             if w in words:
                 relation = "is"
                 break
-
+        
         fingerprint = hashlib.md5(f"{memory_type}:{relation}:{entity}".encode()).hexdigest()[:16]
-
+        
         return {
             "fingerprint": f"{memory_type}:{relation}:{fingerprint}",
             "type": memory_type,
@@ -685,9 +741,10 @@ class Hippocampus:
         }
 
     async def _merge_memories(self, existing: Dict, new: Dict) -> Dict:
+        """Merge new data into existing memory."""
         new_conf = min(1.0, existing.get("confidence", 0.5) + 0.1)
         new_priority = min(1.0, existing.get("priority", 0.5) + 0.05)
-
+        
         return {
             "summary": new.get("summary", existing.get("summary")),
             "priority": new_priority,
@@ -702,6 +759,7 @@ class Hippocampus:
         new_value: str,
         action: str
     ) -> None:
+        """Record memory evolution in history."""
         self._evolution_history[fingerprint].append({
             "old_value": old_value,
             "new_value": new_value,
@@ -710,10 +768,11 @@ class Hippocampus:
         })
 
     def _extract_json(self, text: str) -> Optional[Dict]:
+        """Extract JSON from LLM response."""
         import re
         text = re.sub(r'^```(?:json)?\s*', '', text)
         text = re.sub(r'\s*```$', '', text)
-
+        
         try:
             return json.loads(text)
         except json.JSONDecodeError:
@@ -723,39 +782,4 @@ class Hippocampus:
                     return json.loads(match.group())
                 except json.JSONDecodeError:
                     pass
-        return None
-
-    async def save_emotional_state(
-        self,
-        mood: str,
-        empathy: float,
-        satisfaction: float,
-        mood_history: List[Dict]
-    ) -> None:
-        await self._conn.execute("""
-            INSERT INTO emotional_state (id, current_mood, empathy_level, satisfaction_level, last_interaction, mood_history, updated_at)
-            VALUES (1, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                current_mood = excluded.current_mood,
-                empathy_level = excluded.empathy_level,
-                satisfaction_level = excluded.satisfaction_level,
-                last_interaction = excluded.last_interaction,
-                mood_history = excluded.mood_history,
-                updated_at = excluded.updated_at
-        """, (mood, empathy, satisfaction, datetime.now(), json.dumps(mood_history[-10:]), datetime.now()))
-        await self._conn.commit()
-
-    async def load_emotional_state(self) -> Optional[Dict]:
-        rows = await self._conn.execute_fetchall(
-            "SELECT current_mood, empathy_level, satisfaction_level, last_interaction, mood_history FROM emotional_state WHERE id = 1"
-        )
-        if rows:
-            r = rows[0]
-            return {
-                "mood": r[0],
-                "empathy": r[1],
-                "satisfaction": r[2],
-                "last_interaction": r[3],
-                "history": json.loads(r[4]) if r[4] else []
-            }
         return None

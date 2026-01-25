@@ -74,6 +74,113 @@ class SystemConfig(BaseModel):
 SYSTEM_CONFIG = SystemConfig(admin_id=ADMIN_ID)
 
 
+class NeuralEventBus:
+    """Central event bus for broadcasting neural activity between brain modules.
+    
+    Used for real-time visualization of data flow in the dashboard.
+    Events are emitted when modules communicate with each other.
+    """
+    _current_activity: dict = {}
+    _subscribers: list = []
+    _recent_events: list = []
+    _max_events: int = 50
+    
+    @classmethod
+    def subscribe(cls, callback) -> None:
+        """Subscribe to neural events."""
+        if callback not in cls._subscribers:
+            cls._subscribers.append(callback)
+    
+    @classmethod
+    def unsubscribe(cls, callback) -> None:
+        """Unsubscribe from neural events."""
+        if callback in cls._subscribers:
+            cls._subscribers.remove(callback)
+            
+    @classmethod
+    async def set_activity(cls, module: str, description: str) -> None:
+        """Set the current activity for a specific module."""
+        module = module.lower().replace(" ", "_")
+        if cls._current_activity.get(module) != description:
+            cls._current_activity[module] = description
+            await cls.emit(module, "dashboard", "activity_update")
+
+    @classmethod
+    async def clear_activity(cls, module: str) -> None:
+        """Reset module activity to Idle."""
+        module = module.lower().replace(" ", "_")
+        if module in cls._current_activity:
+            del cls._current_activity[module]
+            await cls.emit(module, "dashboard", "activity_update")
+    
+    @classmethod
+    async def emit(cls, source: str, target: str, event_type: str = "signal") -> None:
+        """Emit a neural activity event."""
+        import asyncio
+        event = {
+            "source": source,
+            "target": target,
+            "type": event_type,
+            "activities": cls._current_activity.copy(),
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # Store recent events
+        cls._recent_events.append(event)
+        if len(cls._recent_events) > cls._max_events:
+            cls._recent_events.pop(0)
+        
+        # Notify all subscribers
+        for subscriber in cls._subscribers:
+            try:
+                if asyncio.iscoroutinefunction(subscriber):
+                    asyncio.create_task(subscriber(event))
+                else:
+                    subscriber(event)
+            except Exception:
+                pass
+    
+    @classmethod
+    def get_recent_events(cls, limit: int = 20) -> list:
+        """Get recent neural events."""
+        return cls._recent_events[-limit:]
+    
+    @classmethod
+    def get_module_states(cls) -> dict:
+        """Get current state of all modules based on recent activity."""
+        from datetime import timedelta
+        now = datetime.now()
+        active_threshold = timedelta(seconds=5)
+        
+        modules = {
+            "brainstem": "idle",
+            "hippocampus": "idle",
+            "amygdala": "idle",
+            "thalamus": "idle",
+            "prefrontal_cortex": "idle",
+            "motor_cortex": "idle",
+            "cerebellum": "idle",
+            "occipital_lobe": "active",  # Always active (dashboard)
+            "medulla_oblongata": "idle"
+        }
+        
+        for event in cls._recent_events[-20:]:
+            try:
+                event_time = datetime.fromisoformat(event["timestamp"])
+                if now - event_time < active_threshold:
+                    if event["source"] in modules:
+                        modules[event["source"]] = "active"
+                    if event["target"] in modules:
+                        modules[event["target"]] = "active"
+            except Exception:
+                pass
+        
+        # Inject current activities into the response
+        modules["_meta"] = {"activities": cls._current_activity.copy()}
+        
+        return modules
+
+
 class AllAPIExhaustedError(Exception):
     """Raised when all API keys and models are exhausted."""
     pass
@@ -311,9 +418,9 @@ class BrainStem:
             from src.amygdala import Amygdala
             from src.thalamus import Thalamus
 
-            self._hippocampus = Hippocampus()
+            self._hippocampus = Hippocampus()  # Uses MongoDB via MongoDBClient
             await self._hippocampus.initialize()
-            print("  ✓ Hippocampus initialized")
+            print("  ✓ Hippocampus initialized (MongoDB)")
 
             self._amygdala = Amygdala()
             await self._amygdala.load_state()
@@ -441,17 +548,34 @@ def main() -> None:
     if not ADMIN_ID:
         print("⚠️  WARNING: ADMIN_TELEGRAM_ID not set. Bot will reject all messages.")
 
+    # Dashboard Server Management
+    dashboard_server = None
+
     def start_dashboard():
+        nonlocal dashboard_server
         try:
             import uvicorn
             from src.occipital_lobe import app as dashboard_app
+            
+            config = uvicorn.Config(dashboard_app, host="0.0.0.0", port=5000, log_level="warning", loop="asyncio")
+            dashboard_server = uvicorn.Server(config)
+            
             print("👁️  Occipital Lobe (Dashboard) starting on http://localhost:5000")
-            uvicorn.run(dashboard_app, host="0.0.0.0", port=5000, log_level="warning")
+            dashboard_server.run()
         except Exception as e:
             print(f"⚠️  Dashboard failed to start: {e}")
 
     dashboard_thread = threading.Thread(target=start_dashboard, daemon=True)
     dashboard_thread.start()
+
+    async def custom_shutdown(app: Application) -> None:
+        """Custom shutdown to stop dashboard server cleanly."""
+        await post_shutdown(app)
+        if dashboard_server:
+            print("🛑 Stopping Dashboard Server...")
+            dashboard_server.should_exit = True
+            # Give it a moment to shut down
+            await asyncio.sleep(1)
 
     from src.motor_cortex import (
         cmd_start, cmd_help, cmd_reset, cmd_status,
@@ -462,7 +586,7 @@ def main() -> None:
         ApplicationBuilder()
         .token(TELEGRAM_TOKEN)
         .post_init(post_init)
-        .post_shutdown(post_shutdown)
+        .post_shutdown(custom_shutdown)
         .defaults(Defaults(parse_mode=ParseMode.MARKDOWN))
         .concurrent_updates(True)
         .build()
@@ -476,7 +600,7 @@ def main() -> None:
     app.add_handler(CommandHandler('bio', cmd_bio))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(
-        (filters.TEXT | filters.PHOTO | filters.Document.ALL | filters.VOICE | filters.AUDIO) & (~filters.COMMAND),
+        (filters.TEXT | filters.PHOTO | filters.Document.ALL) & (~filters.COMMAND),
         handle_msg
     ))
 
