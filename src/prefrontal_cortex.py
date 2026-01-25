@@ -9,6 +9,7 @@ from dataclasses import dataclass, field, asdict
 from enum import Enum
 from collections import defaultdict
 
+import httpx
 import PIL.Image
 from google import genai
 from google.genai import types
@@ -17,7 +18,8 @@ from dateutil import parser as date_parser
 from src.brainstem import (
     GOOGLE_API_KEY, CHAT_MODEL, TIER_1_MODEL, TIER_2_MODEL, TIER_3_MODEL,
     PERSONA_INSTRUCTION, CHAT_INTERACTION_ANALYSIS_INSTRUCTION,
-    EXTRACTION_INSTRUCTION, MemoryType
+    EXTRACTION_INSTRUCTION, MemoryType, API_ROTATOR, AllAPIExhaustedError,
+    OLLAMA_BASE_URL, EMBEDDING_MODEL
 )
 from src.hippocampus import Hippocampus, Memory
 from src.amygdala import Amygdala, PlanProgressState
@@ -131,6 +133,9 @@ class PrefrontalCortex:
             if user_name:
                 await self._hippocampus.update_admin_profile(telegram_name=user_name)
 
+            # Generate embedding for user message
+            user_embedding = await self._generate_embedding(message)
+
             intent_data = await self._extract_intent(message)
             detected_emotion = self._amygdala.detect_emotion_from_text(message)
             self._amygdala.adjust_for_emotion(detected_emotion)
@@ -150,24 +155,52 @@ class PrefrontalCortex:
             schedules = await self._hippocampus.get_upcoming_schedules(hours_ahead=24)
             schedule_context = self._format_schedules(schedules) if schedules else None
 
+            # Retrieve semantically relevant history (1-5 messages)
+            relevant_history = self._thalamus.get_relevant_history(user_embedding, top_k=5)
+            relevant_history_context = self._format_relevant_history(relevant_history)
+
             context = await self._thalamus.build_context(
                 relevant_memories=[asdict(m) for m in memories] if memories else [],
                 schedule_context=schedule_context,
                 intent_data=intent_data
             )
+            
+            # Add relevant history to context
+            if relevant_history_context:
+                context = f"[RELEVANT PAST CONVERSATIONS]\n{relevant_history_context}\n\n{context}"
 
-            response = await self._generate_response(message, context, image_path)
+            response = await self._generate_response_with_rotation(message, context, image_path)
 
-            await self._thalamus.update_session(message, response, image_path)
+            # Store both messages with embeddings
+            response_embedding = await self._generate_embedding(response)
+            await self._thalamus.update_session(
+                message, response, image_path,
+                user_embedding=user_embedding,
+                ai_embedding=response_embedding
+            )
 
             asyncio.create_task(self._post_process(message, response, intent_data))
 
             return response
 
+        except AllAPIExhaustedError:
+            return "⚠️ Semua API dan model sedang kehabisan kuota. Coba lagi nanti."
         except Exception as e:
             return f"ERROR: {str(e)}"
         finally:
             self._processing = False
+
+    def _format_relevant_history(self, messages: List) -> str:
+        """Format relevant history messages for context."""
+        if not messages:
+            return ""
+        lines = []
+        for msg in messages[:5]:
+            time_str = msg.timestamp.strftime("%d/%m %H:%M") if hasattr(msg, 'timestamp') else ""
+            role = "User" if msg.role == "user" else "Vira"
+            content = msg.content[:200] + "..." if len(msg.content) > 200 else msg.content
+            lines.append(f"[{time_str}] {role}: {content}")
+        return "\n".join(lines)
 
     async def _extract_intent(self, text: str) -> Dict:
         cache_key = hashlib.md5(text.encode()).hexdigest()[:16]
@@ -259,17 +292,35 @@ class PrefrontalCortex:
 
         return memories[:5]
 
-    async def _generate_response(
+    async def _generate_embedding(self, text: str) -> Optional[List[float]]:
+        """Generate embedding via Ollama (local) or return None."""
+        if not text or len(text) < 5:
+            return None
+
+        try:
+            ollama_url = OLLAMA_BASE_URL.replace("/v1", "")
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    f"{ollama_url}/api/embeddings",
+                    json={"model": EMBEDDING_MODEL, "prompt": text[:2000]}
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    return data.get("embedding")
+        except Exception:
+            pass
+        return None
+
+    async def _generate_response_with_rotation(
         self,
         user_text: str,
         context: str,
         image_path: Optional[str] = None
     ) -> str:
-        if not self._client:
-            return "Maaf, sistem AI sedang tidak tersedia."
+        """Generate response with automatic API/model rotation on failure."""
+        API_ROTATOR.reset_if_stale(hours=1)
 
         history = self._thalamus.get_history_for_model()
-
         persona_modifier = self._amygdala.get_response_modifier()
         full_instruction = PERSONA_INSTRUCTION + persona_modifier
 
@@ -287,26 +338,53 @@ class PrefrontalCortex:
 
         history.append(types.Content(role="user", parts=parts))
 
-        try:
-            response = self._client.models.generate_content(
-                model=CHAT_MODEL,
-                contents=history,
-                config=types.GenerateContentConfig(
-                    temperature=self.TEMPERATURE,
-                    top_p=self.TOP_P,
-                    max_output_tokens=self.MAX_OUTPUT_TOKENS,
-                    system_instruction=full_instruction
+        max_retries = API_ROTATOR.total_combinations
+        last_error = None
+
+        for attempt in range(max_retries):
+            try:
+                api_key, model = API_ROTATOR.get_current()
+                if not api_key:
+                    raise AllAPIExhaustedError("No API key available")
+
+                client = genai.Client(api_key=api_key)
+                response = client.models.generate_content(
+                    model=model,
+                    contents=history,
+                    config=types.GenerateContentConfig(
+                        temperature=self.TEMPERATURE,
+                        top_p=self.TOP_P,
+                        max_output_tokens=self.MAX_OUTPUT_TOKENS,
+                        system_instruction=full_instruction
+                    )
                 )
-            )
 
-            prefix = self._amygdala.get_response_prefix()
-            text = response.text.strip()
-            if prefix:
-                text = f"{prefix} {text}"
+                prefix = self._amygdala.get_response_prefix()
+                text = response.text.strip()
+                if prefix:
+                    text = f"{prefix} {text}"
+                return text
 
-            return text
-        except Exception as e:
-            return f"Maaf, terjadi kesalahan: {str(e)}"
+            except Exception as e:
+                last_error = e
+                error_str = str(e).lower()
+                if "rate" in error_str or "quota" in error_str or "429" in error_str or "exhausted" in error_str:
+                    if not API_ROTATOR.mark_failed():
+                        raise AllAPIExhaustedError(f"All API combinations exhausted. Last error: {e}")
+                    print(f"⚠️ Rotating API/Model. Attempt {attempt+1}/{max_retries}. Error: {e}")
+                else:
+                    raise e
+
+        raise AllAPIExhaustedError(f"Failed after {max_retries} attempts. Last error: {last_error}")
+
+    async def _generate_response(
+        self,
+        user_text: str,
+        context: str,
+        image_path: Optional[str] = None
+    ) -> str:
+        """Legacy method - now calls rotation-aware version."""
+        return await self._generate_response_with_rotation(user_text, context, image_path)
 
     async def _post_process(
         self,

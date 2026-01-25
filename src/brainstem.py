@@ -74,6 +74,99 @@ class SystemConfig(BaseModel):
 SYSTEM_CONFIG = SystemConfig(admin_id=ADMIN_ID)
 
 
+class AllAPIExhaustedError(Exception):
+    """Raised when all API keys and models are exhausted."""
+    pass
+
+
+class APIRotator:
+    """Manages API key and model rotation with automatic fallback.
+    
+    Strategy:
+    1. Try current model with current API key
+    2. On failure, try next model (same API key)
+    3. If all models exhausted, switch to next API key
+    4. If all combinations exhausted, raise AllAPIExhaustedError
+    """
+    
+    MODELS = [
+        "models/gemini-3-flash-preview",
+        "models/gemini-2.5-flash",
+        "models/gemini-2.5-flash-lite"
+    ]
+    
+    def __init__(self, api_keys: list[str]):
+        self._keys = api_keys if api_keys else [""]
+        self._current_key_idx = 0
+        self._current_model_idx = 0
+        self._failed_combinations: set[tuple[int, int]] = set()
+        self._last_reset = datetime.now()
+    
+    @property
+    def current_api_key(self) -> str:
+        return self._keys[self._current_key_idx] if self._keys else ""
+    
+    @property
+    def current_model(self) -> str:
+        return self.MODELS[self._current_model_idx]
+    
+    @property
+    def total_combinations(self) -> int:
+        return len(self._keys) * len(self.MODELS)
+    
+    def get_current(self) -> tuple[str, str]:
+        """Returns (api_key, model_name) for current combination."""
+        return (self.current_api_key, self.current_model)
+    
+    def mark_failed(self) -> bool:
+        """Mark current combination as failed and rotate.
+        
+        Returns True if rotation successful, False if all exhausted.
+        """
+        self._failed_combinations.add((self._current_key_idx, self._current_model_idx))
+        
+        if len(self._failed_combinations) >= self.total_combinations:
+            return False
+        
+        return self._rotate_to_next_valid()
+    
+    def _rotate_to_next_valid(self) -> bool:
+        """Find next valid (non-failed) combination."""
+        original_key = self._current_key_idx
+        original_model = self._current_model_idx
+        
+        for _ in range(self.total_combinations):
+            self._current_model_idx += 1
+            if self._current_model_idx >= len(self.MODELS):
+                self._current_model_idx = 0
+                self._current_key_idx = (self._current_key_idx + 1) % len(self._keys)
+            
+            if (self._current_key_idx, self._current_model_idx) not in self._failed_combinations:
+                return True
+        
+        self._current_key_idx = original_key
+        self._current_model_idx = original_model
+        return False
+    
+    def reset_if_stale(self, hours: int = 1) -> None:
+        """Reset failed combinations after specified hours."""
+        if (datetime.now() - self._last_reset).total_seconds() > hours * 3600:
+            self._failed_combinations.clear()
+            self._last_reset = datetime.now()
+    
+    def get_status(self) -> dict:
+        """Get rotator status for debugging."""
+        return {
+            "current_key_idx": self._current_key_idx,
+            "current_model": self.current_model,
+            "failed_count": len(self._failed_combinations),
+            "total_combinations": self.total_combinations
+        }
+
+
+API_ROTATOR = APIRotator(GOOGLE_API_KEYS)
+
+
 PERSONA_INSTRUCTION: str = """
 # IDENTITY & PERSONA
 
@@ -360,7 +453,7 @@ def main() -> None:
     dashboard_thread = threading.Thread(target=start_dashboard, daemon=True)
     dashboard_thread.start()
 
-    from src.handlers import (
+    from src.motor_cortex import (
         cmd_start, cmd_help, cmd_reset, cmd_status,
         cmd_instruction, cmd_bio, callback_handler, handle_msg
     )
@@ -383,7 +476,7 @@ def main() -> None:
     app.add_handler(CommandHandler('bio', cmd_bio))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(
-        (filters.TEXT | filters.PHOTO | filters.Document.ALL) & (~filters.COMMAND),
+        (filters.TEXT | filters.PHOTO | filters.Document.ALL | filters.VOICE | filters.AUDIO) & (~filters.COMMAND),
         handle_msg
     ))
 

@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import aiosqlite
 
-from src.brainstem import DB_PATH, ADMIN_ID
+from src.brainstem import DB_PATH, ADMIN_ID, API_ROTATOR, PERSONA_INSTRUCTION
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,24 @@ class ScheduleCreate(BaseModel):
 class AdminProfileUpdate(BaseModel):
     full_name: Optional[str] = None
     additional_info: Optional[str] = None
+
+
+class CustomInstructionUpdate(BaseModel):
+    instruction: str = Field(..., min_length=10, max_length=5000)
+    name: Optional[str] = "Custom Override"
+
+
+# Global custom instruction override (None = use default)
+_custom_instruction_override: Optional[str] = None
+_custom_instruction_name: str = "Default Persona"
+
+
+def get_active_instruction() -> tuple[str, str]:
+    """Get current active instruction and its name."""
+    global _custom_instruction_override, _custom_instruction_name
+    if _custom_instruction_override:
+        return (_custom_instruction_override, _custom_instruction_name)
+    return (PERSONA_INSTRUCTION, "Default Persona")
 
 
 class ConnectionManager:
@@ -306,6 +324,95 @@ async def get_entities(limit: int = 50):
         return [dict(row) for row in rows]
     finally:
         await db.close()
+
+
+@app.get("/api/system-status")
+async def get_system_status():
+    """Get comprehensive system status including API health and active model."""
+    rotator_status = API_ROTATOR.get_status()
+    instruction, instruction_name = get_active_instruction()
+
+    db = await get_db()
+    try:
+        # Get counts
+        mem_cursor = await db.execute("SELECT COUNT(*) FROM memories WHERE status = 'active'")
+        mem_count = (await mem_cursor.fetchone())[0]
+
+        sched_cursor = await db.execute("SELECT COUNT(*) FROM schedules WHERE status = 'pending'")
+        sched_count = (await sched_cursor.fetchone())[0]
+
+        return {
+            "status": "online",
+            "timestamp": datetime.now().isoformat(),
+            "api": {
+                "current_key_index": rotator_status["current_key_idx"],
+                "current_model": rotator_status["current_model"],
+                "failed_combinations": rotator_status["failed_count"],
+                "total_combinations": rotator_status["total_combinations"],
+                "health": "healthy" if rotator_status["failed_count"] < rotator_status["total_combinations"] else "degraded"
+            },
+            "instruction": {
+                "name": instruction_name,
+                "is_custom": instruction_name != "Default Persona",
+                "length": len(instruction)
+            },
+            "database": {
+                "active_memories": mem_count,
+                "pending_schedules": sched_count
+            },
+            "admin_id": ADMIN_ID
+        }
+    finally:
+        await db.close()
+
+
+@app.get("/api/custom-instruction")
+async def get_custom_instruction():
+    """Get current custom instruction."""
+    instruction, name = get_active_instruction()
+    return {
+        "name": name,
+        "instruction": instruction,
+        "is_custom": name != "Default Persona",
+        "default_available": True
+    }
+
+
+@app.put("/api/custom-instruction")
+async def update_custom_instruction(data: CustomInstructionUpdate):
+    """Override the persona instruction."""
+    global _custom_instruction_override, _custom_instruction_name
+    _custom_instruction_override = data.instruction
+    _custom_instruction_name = data.name or "Custom Override"
+
+    await manager.broadcast("instruction_update", {
+        "name": _custom_instruction_name,
+        "is_custom": True
+    })
+
+    return {
+        "status": "updated",
+        "name": _custom_instruction_name,
+        "length": len(data.instruction)
+    }
+
+
+@app.post("/api/reset-instruction")
+async def reset_custom_instruction():
+    """Reset to default persona instruction."""
+    global _custom_instruction_override, _custom_instruction_name
+    _custom_instruction_override = None
+    _custom_instruction_name = "Default Persona"
+
+    await manager.broadcast("instruction_update", {
+        "name": "Default Persona",
+        "is_custom": False
+    })
+
+    return {
+        "status": "reset",
+        "name": "Default Persona"
+    }
 
 
 def run_dashboard(host: str = "0.0.0.0", port: int = 5000):

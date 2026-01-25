@@ -8,6 +8,7 @@ from collections import deque
 from typing import List, Dict, Optional, Any, Deque
 from dataclasses import dataclass, field
 from enum import Enum
+import math
 
 import PIL.Image
 from google.genai import types
@@ -50,6 +51,7 @@ class SessionMessage:
     content: str
     timestamp: datetime.datetime = field(default_factory=datetime.datetime.now)
     image_path: Optional[str] = None
+    embedding: Optional[List[float]] = None
 
 
 class Thalamus:
@@ -106,7 +108,8 @@ class Thalamus:
                         "role": msg.role,
                         "content": msg.content,
                         "timestamp": msg.timestamp.isoformat(),
-                        "image_path": msg.image_path
+                        "image_path": msg.image_path,
+                        "embedding": msg.embedding
                     }
                     for msg in self._session
                 ],
@@ -140,19 +143,54 @@ class Thalamus:
         self,
         user_text: str,
         ai_response: str,
-        image_path: Optional[str] = None
+        image_path: Optional[str] = None,
+        user_embedding: Optional[List[float]] = None,
+        ai_embedding: Optional[List[float]] = None
     ) -> None:
         self._session.append(SessionMessage(
             role="user",
             content=user_text,
-            image_path=image_path
+            image_path=image_path,
+            embedding=user_embedding
         ))
         self._session.append(SessionMessage(
             role="model",
-            content=ai_response
+            content=ai_response,
+            embedding=ai_embedding
         ))
         self._metadata["last_interaction"] = datetime.datetime.now().isoformat()
         await self._save_session()
+
+    def _cosine_similarity(self, vec1: List[float], vec2: List[float]) -> float:
+        """Calculate cosine similarity between two vectors."""
+        if not vec1 or not vec2 or len(vec1) != len(vec2):
+            return 0.0
+        dot_product = sum(a * b for a, b in zip(vec1, vec2))
+        norm1 = math.sqrt(sum(a * a for a in vec1))
+        norm2 = math.sqrt(sum(b * b for b in vec2))
+        if norm1 == 0 or norm2 == 0:
+            return 0.0
+        return dot_product / (norm1 * norm2)
+
+    def get_relevant_history(
+        self,
+        query_embedding: Optional[List[float]],
+        top_k: int = 5,
+        min_similarity: float = 0.5
+    ) -> List[SessionMessage]:
+        """Retrieve top-k semantically similar messages via cosine similarity."""
+        if not query_embedding:
+            return []
+
+        scored_messages = []
+        for msg in self._session:
+            if msg.embedding:
+                sim = self._cosine_similarity(query_embedding, msg.embedding)
+                if sim >= min_similarity:
+                    scored_messages.append((sim, msg))
+
+        scored_messages.sort(key=lambda x: x[0], reverse=True)
+        return [msg for _, msg in scored_messages[:top_k]]
 
     def clear_session(self) -> None:
         self._session.clear()

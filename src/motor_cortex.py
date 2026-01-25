@@ -193,6 +193,12 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         if img_path is None and not text_input:
             return
 
+    # Handle voice messages and audio files
+    if update.message.voice or update.message.audio:
+        transcript = await _handle_audio(update, user_dir)
+        if transcript:
+            text_input = transcript if not text_input else f"{text_input}\n\n[AUDIO TRANSCRIPT]:\n{transcript}"
+
     if not text_input and not img_path:
         return
 
@@ -348,3 +354,85 @@ async def _read_file_content(file_path: str) -> str:
         return raw_data.decode('ascii', errors='ignore')
     except Exception:
         return "[Error reading file]"
+
+
+async def _handle_audio(update, user_dir: str) -> str:
+    """Handle voice messages and audio files via Whisper transcription."""
+    import uuid
+    import httpx
+
+    os.makedirs(user_dir, exist_ok=True)
+
+    try:
+        # Get the audio file
+        if update.message.voice:
+            audio = update.message.voice
+            ext = ".ogg"
+        else:
+            audio = update.message.audio
+            ext = os.path.splitext(audio.file_name or ".mp3")[1] or ".mp3"
+
+        file_obj = await audio.get_file()
+        audio_path = os.path.join(user_dir, f"audio_{uuid.uuid4().hex[:8]}{ext}")
+        await file_obj.download_to_drive(audio_path)
+
+        # Transcribe via Ollama Whisper or fallback
+        transcript = await _transcribe_audio(audio_path)
+
+        # Cleanup
+        if os.path.exists(audio_path):
+            os.remove(audio_path)
+
+        if transcript:
+            await update.message.reply_text(
+                f"🎤 *Audio diterima*\\. Memproses transkripsi\\.\\.\\.",
+                parse_mode="MarkdownV2"
+            )
+            return transcript
+        else:
+            await update.message.reply_text(
+                "⚠️ Gagal mentranskrip audio\\. Whisper tidak tersedia\\.",
+                parse_mode="MarkdownV2"
+            )
+            return None
+
+    except Exception as e:
+        print(f"Audio handling error: {e}")
+        await update.message.reply_text("❌ Gagal memproses audio")
+        return None
+
+
+async def _transcribe_audio(audio_path: str) -> str:
+    """Transcribe audio using Ollama Whisper or local Whisper."""
+    import httpx
+    from src.brainstem import OLLAMA_BASE_URL
+
+    try:
+        # Try Ollama Whisper API
+        ollama_url = OLLAMA_BASE_URL.replace("/v1", "")
+
+        with open(audio_path, 'rb') as f:
+            audio_data = f.read()
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            # Check if whisper model is available
+            resp = await client.post(
+                f"{ollama_url}/api/generate",
+                json={
+                    "model": "whisper",
+                    "prompt": "Transcribe this audio to text",
+                    "stream": False
+                },
+                files={"audio": audio_data}
+            )
+
+            if resp.status_code == 200:
+                data = resp.json()
+                return data.get("response", "")
+
+    except Exception as e:
+        print(f"Whisper transcription failed: {e}")
+
+    # Fallback: Return placeholder if Whisper not available
+    return "[Audio received - Whisper transcription not available. Install with: ollama pull whisper]"
+
