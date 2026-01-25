@@ -2,3 +2,4 @@ storage
 .env
 src/__pycache__
 src/services/__pycache__
+src/db/__pycache__
