@@ -2,6 +2,7 @@ import asyncio
 import json
 import math
 import os
+import shutil
 import subprocess
 import tempfile
 import textwrap
@@ -219,21 +220,9 @@ class ParietalLobe:
                 return f"Error fetching weather: {str(e)}"
 
     def _run_python_sandbox(self, code: str) -> str:
-        BLOCKED_IMPORTS = [
-            'os', 'sys', 'subprocess', 'shutil', 'pathlib',
-            'socket', 'requests', 'urllib', 'http', 'ftplib',
-            'pickle', 'shelve', 'marshal',
-            'ctypes', 'multiprocessing', 'threading',
-            'importlib', '__import__', 'exec', 'eval', 'compile',
-            'open', 'file', 'input', 'raw_input',
-            'globals', 'locals', 'vars', 'dir', 'getattr', 'setattr', 'delattr',
-        ]
-        
-        code_lower = code.lower()
-        for blocked in BLOCKED_IMPORTS:
-            if blocked in code_lower:
-                return f"Error: '{blocked}' is not allowed in sandbox for security reasons."
-        
+        if shutil.which("docker") is None:
+            return "Error: Docker runtime not available on host."
+
         sandbox_code = textwrap.dedent(f'''
 import math
 import json
@@ -246,42 +235,62 @@ from functools import reduce
 
 {code}
 ''')
-        
+
+        temp_dir = tempfile.mkdtemp(prefix="vira_py_")
+        script_name = "main.py"
+        script_path = os.path.join(temp_dir, script_name)
+        docker_image = os.getenv("VIRA_SANDBOX_IMAGE", "python:3.11-slim")
+
         try:
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
+            with open(script_path, "w", encoding="utf-8") as f:
                 f.write(sandbox_code)
-                temp_path = f.name
-            
+            os.chmod(script_path, 0o644)
+
+            docker_cmd = [
+                "docker", "run", "--rm",
+                "--network", "none",
+                "--memory", os.getenv("VIRA_SANDBOX_MEMORY", "256m"),
+                "--pids-limit", os.getenv("VIRA_SANDBOX_PIDS", "64"),
+                "--cpus", os.getenv("VIRA_SANDBOX_CPUS", "1"),
+                "--cap-drop", "ALL",
+                "--security-opt", "no-new-privileges",
+                "--user", "65534:65534",
+                "--read-only",
+                "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m",
+                "-e", "PYTHONDONTWRITEBYTECODE=1",
+                "-v", f"{temp_dir}:/workspace:ro",
+                "-w", "/workspace",
+                docker_image,
+                "python", "-I", "-B", script_name
+            ]
+
             result = subprocess.run(
-                ['python', temp_path],
+                docker_cmd,
                 capture_output=True,
                 text=True,
-                timeout=5,
-                cwd=tempfile.gettempdir()
+                timeout=float(os.getenv("VIRA_SANDBOX_TIMEOUT", "10"))
             )
-            
-            os.unlink(temp_path)
-            
+
             if result.returncode != 0:
-                error_msg = result.stderr.strip()
+                error_msg = result.stderr.strip() or "Sandbox execution failed"
                 if len(error_msg) > 500:
                     error_msg = error_msg[:500] + "..."
                 return f"Error: {error_msg}"
-            
+
             output = result.stdout.strip()
             if not output:
                 return "Code executed successfully but produced no output. Use print() to show results."
-            
+
             if len(output) > 2000:
                 output = output[:2000] + "\n... (output truncated)"
-            
+
             return output
-            
+
         except subprocess.TimeoutExpired:
-            try:
-                os.unlink(temp_path)
-            except:
-                pass
-            return "Error: Code execution timed out (max 5 seconds)."
+            return "Error: Code execution timed out."
+        except FileNotFoundError:
+            return "Error: Docker runtime not found."
         except Exception as e:
             return f"Error executing code: {str(e)}"
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
