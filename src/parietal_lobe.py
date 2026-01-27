@@ -282,6 +282,6 @@ from functools import reduce
                 os.unlink(temp_path)
             except:
                 pass
-            return "Error: Code execution timed out (max 5 seconds)."
+            return "Error: Code execution timed out (max 10 seconds)."
         except Exception as e:
             return f"Error executing code: {str(e)}"
