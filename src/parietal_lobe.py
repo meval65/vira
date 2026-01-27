@@ -219,21 +219,8 @@ class ParietalLobe:
                 return f"Error fetching weather: {str(e)}"
 
     def _run_python_sandbox(self, code: str) -> str:
-        BLOCKED_IMPORTS = [
-            'os', 'sys', 'subprocess', 'shutil', 'pathlib',
-            'socket', 'requests', 'urllib', 'http', 'ftplib',
-            'pickle', 'shelve', 'marshal',
-            'ctypes', 'multiprocessing', 'threading',
-            'importlib', '__import__', 'exec', 'eval', 'compile',
-            'open', 'file', 'input', 'raw_input',
-            'globals', 'locals', 'vars', 'dir', 'getattr', 'setattr', 'delattr',
-        ]
-        
-        code_lower = code.lower()
-        for blocked in BLOCKED_IMPORTS:
-            if blocked in code_lower:
-                return f"Error: '{blocked}' is not allowed in sandbox for security reasons."
-        
+        docker_image = os.getenv("PYTHON_SANDBOX_IMAGE", "python:3.11-slim")
+
         sandbox_code = textwrap.dedent(f'''
 import math
 import json
@@ -246,42 +233,40 @@ from functools import reduce
 
 {code}
 ''')
-        
+
+        docker_cmd = [
+            'docker', 'run', '--rm', '--network', 'none',
+            '--pids-limit', '128', '--memory', '256m', '--cpus', '1',
+            docker_image,
+            'python', '-c', sandbox_code
+        ]
+
         try:
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
-                f.write(sandbox_code)
-                temp_path = f.name
-            
             result = subprocess.run(
-                ['python', temp_path],
+                docker_cmd,
                 capture_output=True,
                 text=True,
-                timeout=5,
-                cwd=tempfile.gettempdir()
+                timeout=5
             )
-            
-            os.unlink(temp_path)
-            
+
             if result.returncode != 0:
-                error_msg = result.stderr.strip()
+                error_msg = result.stderr.strip() or result.stdout.strip()
                 if len(error_msg) > 500:
                     error_msg = error_msg[:500] + "..."
-                return f"Error: {error_msg}"
-            
+                return f"Error: {error_msg or 'Non-zero exit code from sandbox'}"
+
             output = result.stdout.strip()
             if not output:
                 return "Code executed successfully but produced no output. Use print() to show results."
-            
+
             if len(output) > 2000:
                 output = output[:2000] + "\n... (output truncated)"
-            
+
             return output
-            
+
+        except FileNotFoundError:
+            return "Error: Docker is not available on the host."
         except subprocess.TimeoutExpired:
-            try:
-                os.unlink(temp_path)
-            except:
-                pass
             return "Error: Code execution timed out (max 5 seconds)."
         except Exception as e:
             return f"Error executing code: {str(e)}"
