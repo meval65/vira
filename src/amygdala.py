@@ -161,37 +161,47 @@ class Amygdala:
                 emotion_enum = EmotionType(detected_emotion.lower())
             except ValueError:
                 pass
-
+        
         old_mood = self._state.current_mood
-
-        if emotion_enum == EmotionType.HAPPY:
-            self._state.current_mood = MoodState.HAPPY
-            self._state.formality_level = 0.2
-        elif emotion_enum == EmotionType.SAD:
-            self._state.current_mood = MoodState.CONCERNED
-            self._state.formality_level = 0.3
-        elif emotion_enum == EmotionType.ANGRY:
-            self._state.current_mood = MoodState.NEUTRAL
-            self._state.formality_level = 0.7
-        elif emotion_enum == EmotionType.ANXIOUS:
-            self._state.current_mood = MoodState.CONCERNED
-            self._state.formality_level = 0.4
-        elif emotion_enum == EmotionType.EXCITED:
-            self._state.current_mood = MoodState.EXCITED
-            self._state.formality_level = 0.2
-        elif emotion_enum == EmotionType.GRATEFUL:
-            self._state.current_mood = MoodState.HAPPY
-            self._state.formality_level = 0.3
-        else:
-            self._state.current_mood = MoodState.NEUTRAL
-            self._state.formality_level = 0.4
-
+        old_formality = self._state.formality_level
+        old_empathy = self._state.empathy_level
+        
+        MOOD_MAP = {
+            EmotionType.HAPPY: (MoodState.HAPPY, 0.2),
+            EmotionType.SAD: (MoodState.CONCERNED, 0.3),
+            EmotionType.ANGRY: (MoodState.NEUTRAL, 0.7),
+            EmotionType.ANXIOUS: (MoodState.CONCERNED, 0.4),
+            EmotionType.EXCITED: (MoodState.EXCITED, 0.2),
+            EmotionType.GRATEFUL: (MoodState.HAPPY, 0.3),
+            EmotionType.CONFUSED: (MoodState.CONCERNED, 0.5),
+            EmotionType.NEUTRAL: (MoodState.NEUTRAL, 0.4),
+        }
+        
+        target_mood, target_formality = MOOD_MAP.get(emotion_enum, (MoodState.NEUTRAL, 0.4))
         modifier = self.STYLE_MODIFIERS.get(emotion_enum, self.STYLE_MODIFIERS[EmotionType.NEUTRAL])
-        self._state.empathy_level = modifier["empathy"]
-
+        target_empathy = modifier["empathy"]
+        
+        recent_moods = [entry.get("mood") for entry in self._state.mood_history[-5:] if entry.get("mood")]
+        mood_momentum = 0.3 if len(set(recent_moods)) <= 2 and recent_moods else 0.0
+        
+        blend_factor = 0.6 + mood_momentum
+        self._state.formality_level = old_formality * (1 - blend_factor) + target_formality * blend_factor
+        self._state.empathy_level = old_empathy * (1 - blend_factor) + target_empathy * blend_factor
+        
+        self._state.formality_level = max(0.0, min(1.0, self._state.formality_level))
+        self._state.empathy_level = max(0.0, min(1.0, self._state.empathy_level))
+        
+        if old_mood == target_mood:
+            pass
+        elif mood_momentum > 0.2:
+            self._state.current_mood = target_mood
+        else:
+            self._state.current_mood = target_mood
+        
         if old_mood != self._state.current_mood:
-            self._record_mood_change(emotion_enum.value, 0.0)
-
+            delta = 0.1 if target_mood in [MoodState.HAPPY, MoodState.EXCITED, MoodState.PROUD] else -0.05
+            self._record_mood_change(emotion_enum.value, delta)
+        
         self._state.last_interaction = datetime.now()
         return self._state.current_mood
 

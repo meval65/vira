@@ -1,15 +1,3 @@
-"""
-Occipital Lobe Module - Dashboard and API for Vira Personal Life OS.
-
-This module provides:
-- Web dashboard for system visualization
-- REST API for CRUD operations on memories, schedules, entities
-- WebSocket for real-time neural activity monitoring
-- Chat logs API for conversation history
-
-Refactored to use MongoDB instead of SQLite.
-"""
-
 import os
 import uuid
 import asyncio
@@ -22,73 +10,61 @@ from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from src.brainstem import ADMIN_ID, API_ROTATOR, PERSONA_INSTRUCTION, NeuralEventBus
+from src.brainstem import ADMIN_ID, DEFAULT_PERSONA_INSTRUCTION, NeuralEventBus
 from src.db.mongo_client import get_mongo_client, MongoDBClient
 
 logger = logging.getLogger(__name__)
-
-
-# ==================== PYDANTIC MODELS ====================
 
 class MemoryCreate(BaseModel):
     summary: str
     memory_type: str = "general"
     priority: float = 0.5
 
-
 class MemoryUpdate(BaseModel):
     summary: str
-
 
 class ScheduleCreate(BaseModel):
     context: str
     scheduled_at: str
     priority: int = 0
 
-
 class AdminProfileUpdate(BaseModel):
     full_name: Optional[str] = None
     additional_info: Optional[str] = None
-
 
 class CustomInstructionUpdate(BaseModel):
     instruction: str = Field(..., min_length=10, max_length=5000)
     name: Optional[str] = "Custom Override"
 
-
 class PersonaCreate(BaseModel):
     name: str
     instruction: str
     temperature: float = 0.7
-
+    description: Optional[str] = None
 
 class PersonaUpdate(BaseModel):
     name: Optional[str] = None
     instruction: Optional[str] = None
     temperature: Optional[float] = None
-
+    description: Optional[str] = None
 
 class ChatLogEntry(BaseModel):
     role: str
     content: str
     timestamp: Optional[str] = None
 
-
-# ==================== GLOBAL STATE ====================
+class CompressionTriggerRequest(BaseModel):
+    force: bool = False
 
 _custom_instruction_override: Optional[str] = None
 _custom_instruction_name: str = "Default Persona"
-
 
 def get_active_instruction() -> tuple[str, str]:
     """Get current active instruction and its name."""
     global _custom_instruction_override, _custom_instruction_name
     if _custom_instruction_override:
         return (_custom_instruction_override, _custom_instruction_name)
-    return (PERSONA_INSTRUCTION, "Default Persona")
-
-
-# ==================== WEBSOCKET MANAGER ====================
+    return (DEFAULT_PERSONA_INSTRUCTION, "Default Persona")
 
 class ConnectionManager:
     def __init__(self):
@@ -113,23 +89,16 @@ class ConnectionManager:
                 except Exception:
                     self.active_connections.discard(connection)
 
-
 manager = ConnectionManager()
-
-
-# ==================== MONGODB HELPER ====================
 
 def get_mongo() -> MongoDBClient:
     """Get MongoDB client instance."""
     return get_mongo_client()
 
-
-# ==================== FASTAPI APP ====================
-
 app = FastAPI(
     title="Vira Dashboard API",
-    description="Complete System Dashboard for Vira Personal Life OS (MongoDB Edition)",
-    version="3.0.0"
+    description="Complete System Dashboard for Vira Personal Life OS (OpenRouter + MongoDB Edition)",
+    version="4.0.0"
 )
 
 app.add_middleware(
@@ -142,9 +111,6 @@ app.add_middleware(
 
 DASHBOARD_DIR = os.path.join(os.path.dirname(__file__), "dashboard")
 
-
-# ==================== CORE ENDPOINTS ====================
-
 @app.get("/", response_class=HTMLResponse)
 async def dashboard_page():
     html_path = os.path.join(DASHBOARD_DIR, "index.html")
@@ -152,7 +118,6 @@ async def dashboard_page():
         with open(html_path, 'r', encoding='utf-8') as f:
             return f.read()
     return "<h1>Dashboard not found. Please create src/dashboard/index.html</h1>"
-
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -165,7 +130,6 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         await manager.disconnect(websocket)
 
-
 @app.get("/api/health")
 async def get_health():
     try:
@@ -174,7 +138,6 @@ async def get_health():
         return {"status": "healthy", "database": "mongodb", "timestamp": datetime.now().isoformat(), "admin_id": ADMIN_ID}
     except Exception as e:
         return {"status": "unhealthy", "error": str(e)}
-
 
 @app.get("/api/stats")
 async def get_stats():
@@ -185,19 +148,24 @@ async def get_stats():
         sched_count = await mongo.schedules.count_documents({"status": "pending"})
         entity_count = await mongo.entities.count_documents({})
         chat_count = await mongo.chat_logs.count_documents({})
+        
+        uncompressed_count = await mongo.memories.count_documents({
+            "status": "active",
+            "$or": [{"is_compressed": False}, {"is_compressed": {"$exists": False}}]
+        })
+        global_ctx = await mongo.db["global_context"].find_one({"_id": "current"})
 
         return {
             "memories": mem_count,
             "triples": triple_count,
             "pending_schedules": sched_count,
             "entities": entity_count,
-            "chat_logs": chat_count
+            "chat_logs": chat_count,
+            "uncompressed_memories": uncompressed_count,
+            "has_global_context": global_ctx is not None
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
-# ==================== MEMORY ENDPOINTS ====================
 
 @app.get("/api/memories")
 async def get_memories(limit: int = 50, skip: int = 0):
@@ -214,12 +182,13 @@ async def get_memories(limit: int = 50, skip: int = 0):
             "memory_type": d.get("type", "general"),
             "priority": d.get("priority", 0.5),
             "confidence": d.get("confidence", 0.5),
+            "is_compressed": d.get("is_compressed", False),
+            "use_count": d.get("use_count", 0),
             "created_at": d.get("created_at").isoformat() if d.get("created_at") else None,
             "last_used_at": d.get("last_used").isoformat() if d.get("last_used") else None
         }
         for d in docs
     ]
-
 
 @app.post("/api/memories")
 async def create_memory(memory: MemoryCreate):
@@ -233,6 +202,7 @@ async def create_memory(memory: MemoryCreate):
         "priority": memory.priority,
         "confidence": 0.5,
         "status": "active",
+        "is_compressed": False,
         "created_at": datetime.now(),
         "last_used": datetime.now(),
         "use_count": 0
@@ -241,12 +211,10 @@ async def create_memory(memory: MemoryCreate):
     await manager.broadcast("memory_update", {"action": "created", "id": memory_id})
     return {"id": memory_id, "status": "created"}
 
-
 @app.put("/api/memories/{memory_id}")
 async def update_memory(memory_id: str, data: MemoryUpdate):
     mongo = get_mongo()
     
-    # Generate new embedding if brain is available
     emb = None
     try:
         from src.brainstem import get_brain
@@ -256,7 +224,7 @@ async def update_memory(memory_id: str, data: MemoryUpdate):
     except Exception:
         pass
     
-    update_doc = {"summary": data.summary, "last_used": datetime.now()}
+    update_doc = {"summary": data.summary, "last_used": datetime.now(), "is_compressed": False}
     if emb:
         update_doc["embedding"] = emb
     
@@ -270,7 +238,6 @@ async def update_memory(memory_id: str, data: MemoryUpdate):
     
     await manager.broadcast("memory_update", {"action": "updated", "id": memory_id})
     return {"status": "updated"}
-
 
 @app.delete("/api/memories/{memory_id}")
 async def delete_memory(memory_id: str):
@@ -286,8 +253,72 @@ async def delete_memory(memory_id: str):
     await manager.broadcast("memory_update", {"action": "deleted", "id": memory_id})
     return {"status": "deleted"}
 
+@app.get("/api/compression/status")
+async def get_compression_status():
+    """Get current memory compression status."""
+    from src.brainstem import get_brain
+    brain = get_brain()
+    
+    if not brain or not brain.hippocampus:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+    
+    stats = await brain.hippocampus.get_compression_stats()
+    return stats
 
-# ==================== SCHEDULE ENDPOINTS ====================
+@app.get("/api/compression/global-context")
+async def get_global_context():
+    """Get the current global context (compressed memory summary)."""
+    from src.brainstem import get_brain
+    brain = get_brain()
+    
+    if not brain or not brain.hippocampus:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+    
+    context = await brain.hippocampus.get_global_context()
+    
+    if not context:
+        return {"status": "empty", "context": None}
+    
+    return {"status": "available", "context": context}
+
+@app.post("/api/compression/trigger")
+async def trigger_compression(request: CompressionTriggerRequest):
+    """Manually trigger memory compression."""
+    from src.cerebellum import trigger_memory_compression_manual
+    from src.brainstem import get_brain
+    
+    brain = get_brain()
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+    
+    result = await trigger_memory_compression_manual(brain)
+    
+    if result["status"] == "success":
+        await manager.broadcast("compression_update", {
+            "action": "completed",
+            "stats": result.get("stats_after", {})
+        })
+    
+    return result
+
+@app.get("/api/compression/history")
+async def get_compression_history(limit: int = 10):
+    """Get compression history log."""
+    mongo = get_mongo()
+    
+    cursor = mongo.db["compression_log"].find().sort("timestamp", -1).limit(limit)
+    docs = await cursor.to_list(length=limit)
+    
+    return [
+        {
+            "id": str(d["_id"]),
+            "timestamp": d["timestamp"].isoformat() if d.get("timestamp") else None,
+            "memories_compressed": d.get("memories_compressed", 0),
+            "context_length": d.get("context_length", 0),
+            "version": d.get("version", 0)
+        }
+        for d in docs
+    ]
 
 @app.get("/api/schedules")
 async def get_schedules(limit: int = 50, status: Optional[str] = None):
@@ -311,7 +342,6 @@ async def get_schedules(limit: int = 50, status: Optional[str] = None):
         for d in docs
     ]
 
-
 @app.post("/api/schedules")
 async def create_schedule(schedule: ScheduleCreate):
     from dateutil import parser
@@ -332,7 +362,6 @@ async def create_schedule(schedule: ScheduleCreate):
     await manager.broadcast("schedule_update", {"action": "created", "id": schedule_id})
     return {"id": schedule_id, "status": "created"}
 
-
 @app.delete("/api/schedules/{schedule_id}")
 async def delete_schedule(schedule_id: str):
     mongo = get_mongo()
@@ -347,8 +376,17 @@ async def delete_schedule(schedule_id: str):
     await manager.broadcast("schedule_update", {"action": "cancelled", "id": schedule_id})
     return {"status": "cancelled"}
 
-
-# ==================== CHAT LOGS ENDPOINTS (NEW) ====================
+@app.get("/api/schedules/conflicts")
+async def check_schedule_conflicts():
+    """Check for potential schedule conflicts."""
+    from src.brainstem import get_brain
+    brain = get_brain()
+    
+    if not brain or not brain.hippocampus:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+    
+    conflicts = await brain.hippocampus.detect_schedule_conflicts()
+    return {"conflicts": conflicts}
 
 @app.get("/api/chat-logs")
 async def get_chat_logs(limit: int = 50, skip: int = 0):
@@ -365,16 +403,14 @@ async def get_chat_logs(limit: int = 50, skip: int = 0):
             "timestamp": d["timestamp"].isoformat() if d.get("timestamp") else None,
             "has_embedding": d.get("embedding") is not None
         }
-        for d in reversed(docs)  # Chronological order
+        for d in reversed(docs)
     ]
-
 
 @app.get("/api/chat-logs/search")
 async def search_chat_logs(q: str = Query(..., min_length=2), limit: int = 20):
     """Search chat logs by content (text search)."""
     mongo = get_mongo()
     
-    # Simple regex search (case-insensitive)
     cursor = mongo.chat_logs.find({
         "content": {"$regex": q, "$options": "i"}
     }).sort("timestamp", -1).limit(limit)
@@ -390,7 +426,6 @@ async def search_chat_logs(q: str = Query(..., min_length=2), limit: int = 20):
         }
         for d in docs
     ]
-
 
 @app.delete("/api/chat-logs/{log_id}")
 async def delete_chat_log(log_id: str):
@@ -409,7 +444,6 @@ async def delete_chat_log(log_id: str):
     await manager.broadcast("chat_update", {"action": "deleted", "id": log_id})
     return {"status": "deleted"}
 
-
 @app.delete("/api/chat-logs")
 async def clear_chat_logs():
     """Clear all chat logs (use with caution)."""
@@ -417,9 +451,6 @@ async def clear_chat_logs():
     result = await mongo.chat_logs.delete_many({})
     await manager.broadcast("chat_update", {"action": "cleared", "count": result.deleted_count})
     return {"status": "cleared", "deleted_count": result.deleted_count}
-
-
-# ==================== KNOWLEDGE GRAPH ENDPOINTS ====================
 
 @app.get("/api/triples")
 async def get_triples(limit: int = 50):
@@ -439,7 +470,6 @@ async def get_triples(limit: int = 50):
         for d in docs
     ]
 
-
 @app.get("/api/entities")
 async def get_entities(limit: int = 50):
     mongo = get_mongo()
@@ -456,9 +486,6 @@ async def get_entities(limit: int = 50):
         for d in docs
     ]
 
-
-# ==================== PROFILE ENDPOINTS ====================
-
 @app.get("/api/profile")
 async def get_profile():
     mongo = get_mongo()
@@ -470,7 +497,6 @@ async def get_profile():
             "additional_info": doc.get("additional_info")
         }
     return {"telegram_name": None, "full_name": None, "additional_info": None}
-
 
 @app.put("/api/profile")
 async def update_profile(profile: AdminProfileUpdate):
@@ -488,9 +514,6 @@ async def update_profile(profile: AdminProfileUpdate):
     )
     return {"status": "updated"}
 
-
-# ==================== EMOTIONAL STATE ENDPOINTS ====================
-
 @app.get("/api/emotional-state")
 async def get_emotional_state():
     mongo = get_mongo()
@@ -503,59 +526,63 @@ async def get_emotional_state():
         }
     return {"mood": "neutral", "empathy": 0.5, "satisfaction": 0.0}
 
-
-# ==================== NEURAL STATUS ENDPOINTS ====================
-
 @app.on_event("startup")
 async def startup_event():
     NeuralEventBus.subscribe(broadcast_neural_event)
-
 
 @app.on_event("shutdown")
 async def shutdown_event():
     NeuralEventBus.unsubscribe(broadcast_neural_event)
 
-
 async def broadcast_neural_event(event: dict):
     """Broadcast neural event to all connected clients."""
     await manager.broadcast("neural_activity", event)
-
 
 @app.get("/api/neural-status")
 async def get_neural_status():
     """Get current activity state of all brain modules."""
     return NeuralEventBus.get_module_states()
 
-
-# ==================== SYSTEM STATUS ENDPOINTS ====================
-
 @app.get("/api/system-status")
 async def get_system_status():
     """Get comprehensive system status including API health and active model."""
-    rotator_status = API_ROTATOR.get_status()
+    from src.brainstem import get_brain
+    brain = get_brain()
+    
     instruction, instruction_name = get_active_instruction()
+    
+    openrouter_status = {}
+    if brain and brain.openrouter:
+        openrouter_status = brain.openrouter.get_status()
 
     mongo = get_mongo()
     try:
         mem_count = await mongo.memories.count_documents({"status": "active"})
         sched_count = await mongo.schedules.count_documents({"status": "pending"})
+        
+        compression_stats = {}
+        if brain and brain.hippocampus:
+            compression_stats = await brain.hippocampus.get_compression_stats()
 
         return {
             "status": "online",
             "timestamp": datetime.now().isoformat(),
             "database": "mongodb",
             "api": {
-                "current_key_index": rotator_status["current_key_idx"],
-                "current_model": rotator_status["current_model"],
-                "failed_combinations": rotator_status["failed_count"],
-                "total_combinations": rotator_status["total_combinations"],
-                "health": "healthy" if rotator_status["failed_count"] < rotator_status["total_combinations"] else "degraded"
+                "provider": "openrouter",
+                "configured": openrouter_status.get("api_configured", False),
+                "current_model": openrouter_status.get("current_model", "unknown"),
+                "healthy_models": openrouter_status.get("healthy_models", 0),
+                "failed_models": len(openrouter_status.get("failed_models", [])),
+                "total_requests": openrouter_status.get("total_requests", 0),
+                "health": "healthy" if openrouter_status.get("api_configured") else "unconfigured"
             },
             "instruction": {
                 "name": instruction_name,
                 "is_custom": instruction_name != "Default Persona",
                 "length": len(instruction)
             },
+            "compression": compression_stats,
             "database_stats": {
                 "active_memories": mem_count,
                 "pending_schedules": sched_count
@@ -565,8 +592,43 @@ async def get_system_status():
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
+@app.get("/api/openrouter/status")
+async def get_openrouter_status():
+    """Get detailed OpenRouter API status."""
+    from src.brainstem import get_brain
+    brain = get_brain()
+    
+    if not brain or not brain.openrouter:
+        return {
+            "status": "unavailable",
+            "message": "OpenRouter client not initialized"
+        }
+    
+    return brain.openrouter.get_status()
 
-# ==================== PERSONA ENDPOINTS ====================
+@app.get("/api/openrouter/models")
+async def get_openrouter_models():
+    """Get available models and their health status."""
+    from src.brainstem import get_brain
+    brain = get_brain()
+    
+    if not brain or not brain.openrouter:
+        raise HTTPException(status_code=503, detail="OpenRouter client not initialized")
+    
+    return brain.openrouter.get_model_health()
+
+@app.post("/api/openrouter/reset-health")
+async def reset_model_health():
+    """Reset model health scores."""
+    from src.brainstem import get_brain
+    brain = get_brain()
+    
+    if not brain or not brain.openrouter:
+        raise HTTPException(status_code=503, detail="OpenRouter client not initialized")
+    
+    brain.openrouter.reset_health()
+    await manager.broadcast("openrouter_update", {"action": "health_reset"})
+    return {"status": "reset"}
 
 @app.get("/api/personas")
 async def get_personas():
@@ -578,25 +640,54 @@ async def get_personas():
     
     return await brain.hippocampus.get_personas()
 
+@app.get("/api/personas/active")
+async def get_active_persona():
+    """Get the currently active persona."""
+    from src.brainstem import get_brain
+    brain = get_brain()
+    if not brain or not brain.hippocampus:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+    
+    persona = await brain.hippocampus.get_active_persona()
+    if not persona:
+        return {"status": "none", "persona": None}
+    
+    return {"status": "active", "persona": persona}
 
 @app.post("/api/personas")
 async def create_persona(data: PersonaCreate):
     """Create a new persona profile."""
     from src.brainstem import get_brain
     brain = get_brain()
+    if not brain or not brain.hippocampus:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+    
     try:
-        pid = await brain.hippocampus.create_persona(data.name, data.instruction, data.temperature)
+        pid = await brain.hippocampus.create_persona(
+            data.name, 
+            data.instruction, 
+            data.temperature,
+            data.description
+        )
         await manager.broadcast("personas_update", {"action": "created", "id": pid})
+        
+        await NeuralEventBus.emit(
+            "occipital_lobe", "hippocampus", "persona_created",
+            payload={"persona_id": pid, "name": data.name}
+        )
+        
         return {"id": pid, "status": "created"}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-
 
 @app.post("/api/personas/{persona_id}/activate")
 async def activate_persona(persona_id: str):
     """Switch the active persona."""
     from src.brainstem import get_brain
     brain = get_brain()
+    
+    if not brain or not brain.hippocampus:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
     
     success = await brain.hippocampus.set_active_persona(persona_id)
     if not success:
@@ -608,20 +699,30 @@ async def activate_persona(persona_id: str):
     
     persona = await brain.hippocampus.get_active_persona()
     
+    if brain.prefrontal_cortex:
+        await brain.prefrontal_cortex.switch_persona(persona_id)
+    
     await manager.broadcast("instruction_update", {
         "name": persona["name"],
         "is_custom": True,
-        "temperature": persona["temperature"]
+        "temperature": persona.get("temperature", 0.7)
     })
     
+    await NeuralEventBus.emit(
+        "occipital_lobe", "prefrontal_cortex", "persona_switched",
+        payload={"persona_id": persona_id, "name": persona["name"]}
+    )
+    
     return {"status": "activated", "persona": persona}
-
 
 @app.put("/api/personas/{persona_id}")
 async def update_persona(persona_id: str, data: PersonaUpdate):
     """Update persona settings."""
     from src.brainstem import get_brain
     brain = get_brain()
+    
+    if not brain or not brain.hippocampus:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
     
     updates = {k: v for k, v in data.dict().items() if v is not None}
     success = await brain.hippocampus.update_persona(persona_id, updates)
@@ -631,12 +732,14 @@ async def update_persona(persona_id: str, data: PersonaUpdate):
     await manager.broadcast("personas_update", {"action": "updated", "id": persona_id})
     return {"status": "updated"}
 
-
 @app.delete("/api/personas/{persona_id}")
 async def delete_persona(persona_id: str):
     """Delete a persona profile."""
     from src.brainstem import get_brain
     brain = get_brain()
+    
+    if not brain or not brain.hippocampus:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
     
     try:
         success = await brain.hippocampus.delete_persona(persona_id)
@@ -648,9 +751,6 @@ async def delete_persona(persona_id: str):
     await manager.broadcast("personas_update", {"action": "deleted", "id": persona_id})
     return {"status": "deleted"}
 
-
-# ==================== CUSTOM INSTRUCTION ENDPOINTS ====================
-
 @app.get("/api/custom-instruction")
 async def get_custom_instruction():
     """Get current custom instruction."""
@@ -661,7 +761,6 @@ async def get_custom_instruction():
         "is_custom": name != "Default Persona",
         "default_available": True
     }
-
 
 @app.put("/api/custom-instruction")
 async def update_custom_instruction(data: CustomInstructionUpdate):
@@ -681,7 +780,6 @@ async def update_custom_instruction(data: CustomInstructionUpdate):
         "length": len(data.instruction)
     }
 
-
 @app.post("/api/reset-instruction")
 async def reset_custom_instruction():
     """Reset to default persona instruction."""
@@ -699,13 +797,40 @@ async def reset_custom_instruction():
         "name": "Default Persona"
     }
 
+@app.get("/api/context/stats")
+async def get_context_stats():
+    """Get context building statistics."""
+    from src.brainstem import get_brain
+    brain = get_brain()
+    
+    if not brain or not brain.thalamus:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+    
+    return await brain.thalamus.get_context_stats()
 
-# ==================== RUN ====================
+@app.post("/api/maintenance/trigger")
+async def trigger_maintenance():
+    """Manually trigger maintenance tasks."""
+    from src.cerebellum import trigger_maintenance_manual
+    from src.brainstem import get_brain
+    
+    brain = get_brain()
+    if not brain:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
+    
+    result = await trigger_maintenance_manual(brain)
+    
+    if result["status"] == "success":
+        await manager.broadcast("maintenance_update", {
+            "action": "completed",
+            "results": result.get("results", {})
+        })
+    
+    return result
 
 def run_dashboard(host: str = "0.0.0.0", port: int = 5000):
     import uvicorn
     uvicorn.run(app, host=host, port=port, log_level="info")
-
 
 if __name__ == "__main__":
     run_dashboard()

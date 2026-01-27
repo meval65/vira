@@ -1,13 +1,30 @@
-google-generativeai
+# Vira Personal Life OS - Dependencies
+# Refactored for OpenRouter API (replacing google-generativeai)
+
+# Core
 python-dotenv
 python-telegram-bot[job-queue]
+
+# Database
 motor
 pymongo
-numpy
+
+# HTTP Client (for OpenRouter API)
 httpx
+
+# Data Processing
+numpy
 Pillow
 python-dateutil
 pydantic
-aiosqlite
+
+# Web Dashboard
 fastapi
 uvicorn[standard]
+
+# Optional: Token counting for context management
+# tiktoken  # Uncomment if precise token counting is needed
+
+# Legacy (can be removed after migration)
+# google-generativeai  # Replaced by OpenRouter via httpx
+aiosqlite  # May still be needed for some legacy operations

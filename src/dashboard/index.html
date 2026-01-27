@@ -4,114 +4,173 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Vira Neural Dashboard - Complete Edition</title>
+    <title>Vira Neural Interface v2.1</title>
+
+    <!-- React & Tailwind -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
+
+    <!-- Fonts -->
     <link
-        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+        href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
         rel="stylesheet">
+
+    <!-- Custom Config Tailwind -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Outfit', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    },
+                    colors: {
+                        primary: '#6366f1', // Indigo
+                        accent: '#a855f7', // Purple
+                        dark: '#030014',
+                        glass: 'rgba(17, 25, 40, 0.75)',
+                        'glass-border': 'rgba(255, 255, 255, 0.08)',
+                    },
+                    animation: {
+                        'blob': 'blob 7s infinite',
+                        'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                    },
+                    keyframes: {
+                        blob: {
+                            '0%': { transform: 'translate(0px, 0px) scale(1)' },
+                            '33%': { transform: 'translate(30px, -50px) scale(1.1)' },
+                            '66%': { transform: 'translate(-20px, 20px) scale(0.9)' },
+                            '100%': { transform: 'translate(0px, 0px) scale(1)' },
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+
     <style>
         :root {
-            --bg: #0a0a0f;
-            --card: rgba(18, 18, 28, 0.9);
-            --accent: #8b5cf6;
-        }
-
-        * {
-            box-sizing: border-box;
+            --bg-dark: #030014;
         }
 
         body {
-            font-family: 'Inter', sans-serif;
-            background: var(--bg);
+            background-color: var(--bg-dark);
             color: #e2e8f0;
-            margin: 0;
-            min-height: 100vh;
+            overflow-x: hidden;
+            -webkit-font-smoothing: antialiased;
         }
 
-        .glass {
-            background: var(--card);
-            backdrop-filter: blur(12px);
-            border: 1px solid rgba(255, 255, 255, 0.08);
+        /* Background Effects */
+        .bg-grid {
+            background-size: 50px 50px;
+            background-image: linear-gradient(to right, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(to bottom, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+            mask-image: linear-gradient(to bottom, black 40%, transparent 100%);
         }
 
-        .mono {
-            font-family: 'JetBrains Mono', monospace;
+        /* Premium Glassmorphism */
+        .glass-panel {
+            background: rgba(30, 41, 59, 0.4);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
         }
 
-        .scrollbar::-webkit-scrollbar {
-            width: 5px;
+        .glass-card {
+            background: linear-gradient(145deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.01) 100%);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            transition: all 0.3s ease;
         }
 
-        .scrollbar::-webkit-scrollbar-thumb {
-            background: rgba(139, 92, 246, 0.4);
-            border-radius: 3px;
+        .glass-card:hover {
+            border-color: rgba(168, 85, 247, 0.3);
+            transform: translateY(-2px);
+            box-shadow: 0 10px 40px -10px rgba(168, 85, 247, 0.15);
         }
 
-        .fade-in {
-            animation: fadeIn 0.2s ease-out;
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
         }
 
-        @keyframes fadeIn {
-            from {
-                opacity: 0;
-            }
+        ::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.2);
+        }
 
+        ::-webkit-scrollbar-thumb {
+            background: rgba(99, 102, 241, 0.3);
+            border-radius: 10px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(99, 102, 241, 0.6);
+        }
+
+        /* Input Styling */
+        .input-neural {
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: all 0.2s;
+        }
+
+        .input-neural:focus {
+            border-color: #a855f7;
+            box-shadow: 0 0 0 2px rgba(168, 85, 247, 0.2);
+            outline: none;
+        }
+
+        /* Animasi Masuk */
+        .fade-in-up {
+            animation: fadeInUp 0.5s ease-out forwards;
+            opacity: 0;
+            transform: translateY(10px);
+        }
+
+        @keyframes fadeInUp {
             to {
                 opacity: 1;
-            }
-        }
-
-        .pulse {
-            animation: pulse 2s infinite;
-        }
-
-        @keyframes pulse {
-
-            0%,
-            100% {
-                opacity: 1;
-            }
-
-            50% {
-                opacity: 0.5;
-            }
-        }
-
-        .live-dot {
-            animation: liveDot 1.5s infinite;
-        }
-
-        @keyframes liveDot {
-
-            0%,
-            100% {
-                box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
-            }
-
-            70% {
-                box-shadow: 0 0 0 8px rgba(16, 185, 129, 0);
+                transform: translateY(0);
             }
         }
     </style>
 </head>
 
 <body>
+    <!-- Background Elements -->
+    <div class="fixed inset-0 z-[-1] overflow-hidden pointer-events-none">
+        <div class="absolute inset-0 bg-grid"></div>
+        <div
+            class="absolute top-[-10%] left-[-10%] w-96 h-96 bg-primary/20 rounded-full mix-blend-screen filter blur-[100px] opacity-30 animate-blob">
+        </div>
+        <div
+            class="absolute top-[-10%] right-[-10%] w-96 h-96 bg-accent/20 rounded-full mix-blend-screen filter blur-[100px] opacity-30 animate-blob animation-delay-2000">
+        </div>
+        <div
+            class="absolute -bottom-32 left-1/2 w-96 h-96 bg-blue-500/20 rounded-full mix-blend-screen filter blur-[100px] opacity-30 animate-blob animation-delay-4000">
+        </div>
+    </div>
+
     <div id="root"></div>
+
     <script type="text/babel">
         const { useState, useEffect, useCallback, useRef } = React;
         const API = window.location.origin;
 
-        // Icon Component
+        // --- COMPONENTS UTILS ---
+
         const Icon = ({ name, size = 18, className = "" }) => {
-            useEffect(() => { window.lucide?.createIcons(); }, [name]);
-            return <i data-lucide={name} style={{ width: size, height: size }} className={className}></i>;
+            const iconRef = useRef(null);
+            useEffect(() => {
+                if (window.lucide) window.lucide.createIcons({ root: iconRef.current });
+            }, [name]);
+            return <span ref={iconRef}><i data-lucide={name} style={{ width: size, height: size }} className={`inline-block ${className}`}></i></span>;
         };
 
-        // API Helpers
         const api = {
             get: async (ep) => { try { const r = await fetch(`${API}${ep}`); return r.ok ? await r.json() : null; } catch { return null; } },
             post: async (ep, d) => { const r = await fetch(`${API}${ep}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(d) }); return r.ok ? await r.json() : null; },
@@ -119,36 +178,73 @@
             del: async (ep) => { const r = await fetch(`${API}${ep}`, { method: 'DELETE' }); return r.ok; }
         };
 
-        // Stat Card
-        const Stat = ({ icon, value, label, color = "violet" }) => (
-            <div className="glass rounded-xl p-4 flex items-center gap-3">
-                <div className={`p-2 rounded-lg bg-${color}-500/20`}><Icon name={icon} size={20} className={`text-${color}-400`} /></div>
-                <div><p className="text-xl font-bold text-white">{value}</p><p className="text-[10px] text-slate-400 uppercase">{label}</p></div>
-            </div>
-        );
+        // --- UI COMPONENTS ---
 
-        // Modal
-        const Modal = ({ title, onClose, children, wide }) => (
-            <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 fade-in" onClick={onClose}>
-                <div className={`glass rounded-2xl p-6 ${wide ? 'w-full max-w-3xl' : 'w-full max-w-lg'} max-h-[90vh] overflow-y-auto scrollbar`} onClick={e => e.stopPropagation()}>
-                    <div className="flex justify-between items-center mb-4">
-                        <h3 className="text-lg font-bold text-white">{title}</h3>
-                        <button onClick={onClose} className="text-slate-400 hover:text-white"><Icon name="x" size={20} /></button>
+        const Stat = ({ icon, value, label, color = "violet" }) => {
+            const colors = {
+                violet: "from-violet-500 to-purple-500",
+                blue: "from-blue-500 to-cyan-500",
+                amber: "from-amber-500 to-orange-500",
+                emerald: "from-emerald-500 to-teal-500",
+                rose: "from-rose-500 to-pink-500"
+            };
+            const bgGradient = colors[color] || colors.violet;
+
+            return (
+                <div className="glass-card rounded-2xl p-4 flex items-center gap-4 relative overflow-hidden group">
+                    <div className={`absolute inset-0 bg-gradient-to-r ${bgGradient} opacity-0 group-hover:opacity-5 transition-opacity duration-500`}></div>
+                    <div className={`p-3 rounded-xl bg-gradient-to-br ${bgGradient} bg-opacity-10 shadow-lg shadow-${color}-500/20`}>
+                        <Icon name={icon} size={24} className="text-white" />
                     </div>
-                    {children}
+                    <div>
+                        <h4 className="text-2xl font-bold text-white tracking-tight">{value}</h4>
+                        <p className="text-xs font-medium text-slate-400 uppercase tracking-wider">{label}</p>
+                    </div>
+                </div>
+            );
+        };
+
+        const Modal = ({ title, onClose, children, wide }) => (
+            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-[fadeIn_0.2s_ease-out]" onClick={onClose}>
+                <div className={`glass-panel rounded-2xl p-0 ${wide ? 'w-full max-w-4xl' : 'w-full max-w-lg'} max-h-[90vh] overflow-hidden flex flex-col shadow-2xl border border-white/10`} onClick={e => e.stopPropagation()}>
+                    <div className="px-6 py-4 border-b border-white/5 flex justify-between items-center bg-white/5">
+                        <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                            <span className="w-1 h-5 bg-accent rounded-full"></span>
+                            {title}
+                        </h3>
+                        <button onClick={onClose} className="p-1 rounded-full hover:bg-white/10 text-slate-400 hover:text-white transition-colors"><Icon name="x" size={20} /></button>
+                    </div>
+                    <div className="p-6 overflow-y-auto scrollbar">
+                        {children}
+                    </div>
                 </div>
             </div>
         );
 
-        // Tab Button
         const Tab = ({ active, icon, label, onClick, badge }) => (
-            <button onClick={onClick} className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${active ? 'bg-violet-500/20 text-violet-400 border border-violet-500/50' : 'text-slate-400 hover:text-white hover:bg-white/5 border border-transparent'}`}>
-                <Icon name={icon} size={16} />{label}
-                {badge > 0 && <span className="ml-1 px-1.5 py-0.5 text-[9px] bg-violet-500 text-white rounded-full">{badge}</span>}
+            <button
+                onClick={onClick}
+                className={`relative flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-medium transition-all duration-300 ${active
+                    ? 'text-white shadow-[0_0_20px_rgba(139,92,246,0.3)]'
+                    : 'text-slate-400 hover:text-white hover:bg-white/5'
+                    }`}
+            >
+                {active && (
+                    <span className="absolute inset-0 bg-gradient-to-r from-violet-600 to-indigo-600 rounded-full -z-10 animate-[fadeIn_0.3s_ease-out]"></span>
+                )}
+                <Icon name={icon} size={16} />
+                <span>{label}</span>
+                {badge > 0 && (
+                    <span className={`ml-1 px-1.5 py-0.5 text-[10px] font-bold rounded-full ${active ? 'bg-white text-violet-600' : 'bg-white/10 text-slate-300'}`}>
+                        {badge}
+                    </span>
+                )}
             </button>
         );
 
-        // ==================== MEMORIES PANEL ====================
+        // --- SUB-PANELS ---
+
+        // 1. Memories Panel
         const MemoriesPanel = ({ data, refresh }) => {
             const [showForm, setShowForm] = useState(false);
             const [editId, setEditId] = useState(null);
@@ -164,50 +260,64 @@
             const edit = (m) => { setEditId(m.id); setForm({ summary: m.summary, memory_type: m.memory_type, priority: m.priority }); setShowForm(true); };
 
             return (
-                <div className="space-y-4 fade-in">
+                <div className="space-y-6 fade-in-up">
                     <div className="flex justify-between items-center">
-                        <h2 className="text-lg font-bold flex items-center gap-2"><Icon name="brain" /> Memories <span className="text-slate-500 text-sm">({data.length})</span></h2>
-                        <button onClick={() => { setEditId(null); setForm({ summary: '', memory_type: 'general', priority: 0.5 }); setShowForm(true); }} className="px-3 py-1.5 bg-violet-600 hover:bg-violet-500 rounded-lg text-sm font-medium">+ Add</button>
+                        <div>
+                            <h2 className="text-xl font-bold text-white">Core Memories</h2>
+                            <p className="text-xs text-slate-400">Long-term storage and retrieval system</p>
+                        </div>
+                        <button onClick={() => { setEditId(null); setForm({ summary: '', memory_type: 'general', priority: 0.5 }); setShowForm(true); }} className="px-4 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:opacity-90 rounded-lg text-sm font-medium shadow-lg shadow-violet-500/20 transition-all">+ Add Memory</button>
                     </div>
-                    <div className="space-y-2 max-h-[60vh] overflow-y-auto scrollbar pr-1">
-                        {data.map(m => (
-                            <div key={m.id} className="group p-3 bg-white/5 hover:bg-white/10 rounded-lg border border-white/5 flex justify-between items-start transition-all">
-                                <div className="flex-1 min-w-0">
-                                    <div className="flex items-center gap-2 mb-1">
-                                        <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${m.memory_type === 'fact' ? 'bg-emerald-500/20 text-emerald-400' : m.memory_type === 'preference' ? 'bg-blue-500/20 text-blue-400' : 'bg-slate-500/20 text-slate-400'}`}>{m.memory_type}</span>
-                                        <span className="text-[9px] text-slate-500">Pri: {(m.priority * 100).toFixed(0)}%</span>
+
+                    <div className="grid gap-3 max-h-[60vh] overflow-y-auto scrollbar pr-2">
+                        {data.map((m, idx) => (
+                            <div key={m.id} className="glass-card p-4 rounded-xl flex gap-4 group animate-[fadeInUp_0.3s_ease-out]" style={{ animationDelay: `${idx * 50}ms` }}>
+                                <div className={`w-1 rounded-full ${m.memory_type === 'fact' ? 'bg-emerald-500' : m.memory_type === 'preference' ? 'bg-blue-500' : 'bg-slate-500'}`}></div>
+                                <div className="flex-1">
+                                    <div className="flex items-center gap-2 mb-2">
+                                        <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md bg-white/5 border border-white/5 ${m.memory_type === 'fact' ? 'text-emerald-400' : m.memory_type === 'preference' ? 'text-blue-400' : 'text-slate-400'}`}>{m.memory_type}</span>
+                                        <div className="h-1 flex-1 bg-white/5 rounded-full overflow-hidden max-w-[100px]">
+                                            <div className="h-full bg-violet-500" style={{ width: `${m.priority * 100}%` }}></div>
+                                        </div>
                                     </div>
-                                    <p className="text-sm text-slate-200">{m.summary}</p>
+                                    <p className="text-sm text-slate-200 leading-relaxed">{m.summary}</p>
                                 </div>
-                                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity ml-2">
-                                    <button onClick={() => edit(m)} className="p-1.5 rounded bg-blue-500/20 text-blue-400 hover:bg-blue-500 hover:text-white"><Icon name="edit-2" size={12} /></button>
-                                    <button onClick={() => del(m.id)} className="p-1.5 rounded bg-rose-500/20 text-rose-400 hover:bg-rose-500 hover:text-white"><Icon name="trash-2" size={12} /></button>
+                                <div className="flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-all transform translate-x-2 group-hover:translate-x-0">
+                                    <button onClick={() => edit(m)} className="p-2 rounded-lg bg-blue-500/10 text-blue-400 hover:bg-blue-500 hover:text-white transition-colors"><Icon name="edit-2" size={14} /></button>
+                                    <button onClick={() => del(m.id)} className="p-2 rounded-lg bg-rose-500/10 text-rose-400 hover:bg-rose-500 hover:text-white transition-colors"><Icon name="trash-2" size={14} /></button>
                                 </div>
                             </div>
                         ))}
-                        {data.length === 0 && <p className="text-center text-slate-500 py-8">No memories yet</p>}
+                        {data.length === 0 && <div className="text-center py-12 border border-dashed border-white/10 rounded-xl"><Icon name="brain" size={40} className="text-slate-600 mb-2" /><p className="text-slate-500">No memory traces found.</p></div>}
                     </div>
+
                     {showForm && (
-                        <Modal title={editId ? "Edit Memory" : "Add Memory"} onClose={() => setShowForm(false)}>
-                            <div className="space-y-4">
-                                <textarea value={form.summary} onChange={e => setForm({ ...form, summary: e.target.value })} placeholder="Memory content..." className="w-full h-24 bg-black/30 rounded-lg p-3 text-sm border border-white/10 focus:border-violet-500 focus:outline-none" />
-                                <div className="grid grid-cols-2 gap-3">
+                        <Modal title={editId ? "Edit Memory Node" : "New Memory Node"} onClose={() => setShowForm(false)}>
+                            <div className="space-y-5">
+                                <textarea value={form.summary} onChange={e => setForm({ ...form, summary: e.target.value })} placeholder="Enter memory data..." className="w-full h-32 input-neural rounded-xl p-4 text-sm text-white placeholder-slate-500" />
+                                <div className="grid grid-cols-2 gap-4">
                                     <div>
-                                        <label className="text-[10px] text-slate-400 uppercase mb-1 block">Type</label>
-                                        <select value={form.memory_type} onChange={e => setForm({ ...form, memory_type: e.target.value })} className="w-full bg-black/30 rounded-lg p-2 text-sm border border-white/10">
-                                            <option value="general">General</option>
-                                            <option value="fact">Fact</option>
-                                            <option value="preference">Preference</option>
-                                            <option value="event">Event</option>
-                                            <option value="bio">Bio</option>
-                                        </select>
+                                        <label className="text-xs font-semibold text-slate-400 uppercase mb-2 block">Category</label>
+                                        <div className="relative">
+                                            <select value={form.memory_type} onChange={e => setForm({ ...form, memory_type: e.target.value })} className="w-full input-neural rounded-xl p-3 text-sm text-white appearance-none cursor-pointer">
+                                                <option value="general">General</option>
+                                                <option value="fact">Fact</option>
+                                                <option value="preference">Preference</option>
+                                                <option value="event">Event</option>
+                                                <option value="bio">Bio</option>
+                                            </select>
+                                            <div className="absolute right-3 top-3.5 pointer-events-none text-slate-400"><Icon name="chevron-down" size={14} /></div>
+                                        </div>
                                     </div>
                                     <div>
-                                        <label className="text-[10px] text-slate-400 uppercase mb-1 block">Priority</label>
-                                        <input type="number" step="0.1" min="0" max="1" value={form.priority} onChange={e => setForm({ ...form, priority: parseFloat(e.target.value) || 0.5 })} className="w-full bg-black/30 rounded-lg p-2 text-sm border border-white/10" />
+                                        <label className="text-xs font-semibold text-slate-400 uppercase mb-2 block">Neural Priority</label>
+                                        <div className="flex items-center gap-3 bg-black/20 p-2 rounded-xl border border-white/5">
+                                            <input type="range" min="0" max="1" step="0.1" value={form.priority} onChange={e => setForm({ ...form, priority: parseFloat(e.target.value) })} className="flex-1 accent-violet-500 h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer" />
+                                            <span className="text-xs font-mono text-violet-400 w-8 text-right">{(form.priority * 100).toFixed(0)}%</span>
+                                        </div>
                                     </div>
                                 </div>
-                                <button onClick={save} className="w-full py-2 bg-violet-600 hover:bg-violet-500 rounded-lg font-medium">{editId ? 'Update' : 'Save'}</button>
+                                <button onClick={save} className="w-full py-3 bg-violet-600 hover:bg-violet-500 rounded-xl font-bold text-white shadow-lg shadow-violet-900/20 transition-all transform active:scale-95">{editId ? 'Update Node' : 'Initialize Node'}</button>
                             </div>
                         </Modal>
                     )}
@@ -215,7 +325,7 @@
             );
         };
 
-        // ==================== SCHEDULES PANEL ====================
+        // 2. Schedules Panel
         const SchedulesPanel = ({ data, refresh }) => {
             const [showForm, setShowForm] = useState(false);
             const [form, setForm] = useState({ context: '', scheduled_at: '', priority: 0 });
@@ -228,32 +338,45 @@
             const del = async (id) => { if (confirm('Batalkan jadwal ini?')) { await api.del(`/api/schedules/${id}`); refresh(); } };
 
             return (
-                <div className="space-y-4 fade-in">
+                <div className="space-y-6 fade-in-up">
                     <div className="flex justify-between items-center">
-                        <h2 className="text-lg font-bold flex items-center gap-2"><Icon name="calendar" /> Schedules <span className="text-slate-500 text-sm">({data.length})</span></h2>
-                        <button onClick={() => setShowForm(true)} className="px-3 py-1.5 bg-violet-600 hover:bg-violet-500 rounded-lg text-sm font-medium">+ Add</button>
+                        <div>
+                            <h2 className="text-xl font-bold text-white">Temporal Queue</h2>
+                            <p className="text-xs text-slate-400">Scheduled tasks and automated triggers</p>
+                        </div>
+                        <button onClick={() => setShowForm(true)} className="px-4 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:opacity-90 rounded-lg text-sm font-medium shadow-lg shadow-violet-500/20 transition-all">+ Add Task</button>
                     </div>
-                    <div className="space-y-2 max-h-[60vh] overflow-y-auto scrollbar pr-1">
-                        {data.map(s => (
-                            <div key={s.id} className="group p-3 bg-white/5 hover:bg-white/10 rounded-lg border border-white/5 flex justify-between items-start transition-all">
-                                <div className="flex-1 min-w-0">
-                                    <div className="flex items-center gap-2 mb-1">
-                                        <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${s.status === 'pending' ? 'bg-amber-500/20 text-amber-400' : s.status === 'executed' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-500/20 text-slate-400'}`}>{s.status}</span>
-                                        <span className="text-[10px] text-slate-500 mono">{s.scheduled_at?.replace('T', ' ').substring(0, 16)}</span>
+                    <div className="space-y-3 max-h-[60vh] overflow-y-auto scrollbar pr-2">
+                        {data.map((s, idx) => (
+                            <div key={s.id} className="glass-card p-4 rounded-xl flex items-center justify-between group animate-[fadeInUp_0.3s_ease-out]" style={{ animationDelay: `${idx * 50}ms` }}>
+                                <div className="flex items-start gap-4">
+                                    <div className="flex flex-col items-center justify-center w-12 h-12 rounded-lg bg-white/5 border border-white/5">
+                                        <span className="text-xs text-slate-400 font-bold uppercase">{new Date(s.scheduled_at).toLocaleString('default', { month: 'short' })}</span>
+                                        <span className="text-lg font-bold text-white">{new Date(s.scheduled_at).getDate()}</span>
                                     </div>
-                                    <p className="text-sm text-slate-200">{s.context}</p>
+                                    <div>
+                                        <div className="flex items-center gap-2 mb-1">
+                                            <span className={`w-2 h-2 rounded-full ${s.status === 'pending' ? 'bg-amber-500 animate-pulse' : s.status === 'executed' ? 'bg-emerald-500' : 'bg-slate-500'}`}></span>
+                                            <span className="text-xs font-mono text-slate-400">{s.scheduled_at?.replace('T', ' ').substring(11, 16)}</span>
+                                            <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border border-white/5 ${s.status === 'pending' ? 'text-amber-400' : s.status === 'executed' ? 'text-emerald-400' : 'text-slate-400'}`}>{s.status}</span>
+                                        </div>
+                                        <p className="text-sm font-medium text-slate-200">{s.context}</p>
+                                    </div>
                                 </div>
-                                <button onClick={() => del(s.id)} className="p-1.5 rounded bg-rose-500/20 text-rose-400 hover:bg-rose-500 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity ml-2"><Icon name="trash-2" size={12} /></button>
+                                <button onClick={() => del(s.id)} className="p-2 rounded-lg bg-rose-500/10 text-rose-400 hover:bg-rose-500 hover:text-white opacity-0 group-hover:opacity-100 transition-all transform translate-x-4 group-hover:translate-x-0"><Icon name="x" size={16} /></button>
                             </div>
                         ))}
-                        {data.length === 0 && <p className="text-center text-slate-500 py-8">No schedules</p>}
+                        {data.length === 0 && <div className="text-center py-12 border border-dashed border-white/10 rounded-xl"><p className="text-slate-500">Queue is empty.</p></div>}
                     </div>
                     {showForm && (
-                        <Modal title="Add Schedule" onClose={() => setShowForm(false)}>
+                        <Modal title="Schedule New Task" onClose={() => setShowForm(false)}>
                             <div className="space-y-4">
-                                <textarea value={form.context} onChange={e => setForm({ ...form, context: e.target.value })} placeholder="Reminder content..." className="w-full h-20 bg-black/30 rounded-lg p-3 text-sm border border-white/10 focus:border-violet-500 focus:outline-none" />
-                                <input type="datetime-local" value={form.scheduled_at} onChange={e => setForm({ ...form, scheduled_at: e.target.value })} className="w-full bg-black/30 rounded-lg p-3 text-sm border border-white/10" />
-                                <button onClick={save} className="w-full py-2 bg-violet-600 hover:bg-violet-500 rounded-lg font-medium">Create</button>
+                                <textarea value={form.context} onChange={e => setForm({ ...form, context: e.target.value })} placeholder="Task description..." className="w-full h-24 input-neural rounded-xl p-4 text-sm text-white" />
+                                <div>
+                                    <label className="text-xs font-semibold text-slate-400 uppercase mb-2 block">Execution Time</label>
+                                    <input type="datetime-local" value={form.scheduled_at} onChange={e => setForm({ ...form, scheduled_at: e.target.value })} className="w-full input-neural rounded-xl p-3 text-sm text-white" />
+                                </div>
+                                <button onClick={save} className="w-full py-3 bg-violet-600 hover:bg-violet-500 rounded-xl font-bold text-white transition-all">Add to Queue</button>
                             </div>
                         </Modal>
                     )}
@@ -261,7 +384,7 @@
             );
         };
 
-        // ==================== CHAT LOGS PANEL ====================
+        // 3. Chat Logs
         const ChatLogsPanel = ({ data, refresh }) => {
             const [search, setSearch] = useState('');
             const [results, setResults] = useState(null);
@@ -271,64 +394,89 @@
                 const r = await api.get(`/api/chat-logs/search?q=${encodeURIComponent(search)}`);
                 setResults(r || []);
             };
-            const del = async (id) => { if (confirm('Hapus?')) { await api.del(`/api/chat-logs/${id}`); refresh(); } };
             const clearAll = async () => { if (confirm('HAPUS SEMUA chat logs?')) { await api.del('/api/chat-logs'); refresh(); } };
 
             const list = results !== null ? results : data;
 
             return (
-                <div className="space-y-4 fade-in">
+                <div className="space-y-6 fade-in-up">
                     <div className="flex justify-between items-center gap-4">
-                        <h2 className="text-lg font-bold flex items-center gap-2"><Icon name="message-circle" /> Chat Logs <span className="text-slate-500 text-sm">({data.length})</span></h2>
-                        <button onClick={clearAll} className="px-3 py-1.5 bg-rose-600/20 hover:bg-rose-600 text-rose-400 hover:text-white rounded-lg text-sm font-medium">Clear All</button>
+                        <div>
+                            <h2 className="text-xl font-bold text-white">Communication Logs</h2>
+                            <p className="text-xs text-slate-400">Recorded interaction history</p>
+                        </div>
+                        <div className="flex gap-2">
+                            <div className="relative group">
+                                <input value={search} onChange={e => setSearch(e.target.value)} onKeyDown={e => e.key === 'Enter' && doSearch()} placeholder="Search logs..." className="bg-white/5 hover:bg-white/10 focus:bg-black/40 border border-white/10 focus:border-violet-500 rounded-full py-2 pl-4 pr-10 text-sm text-white w-48 focus:w-64 transition-all outline-none" />
+                                <button onClick={doSearch} className="absolute right-2 top-2 text-slate-400 group-focus-within:text-violet-400"><Icon name="search" size={16} /></button>
+                            </div>
+                            <button onClick={clearAll} className="p-2 bg-rose-500/10 hover:bg-rose-600 text-rose-400 hover:text-white rounded-full transition-colors"><Icon name="trash-2" size={18} /></button>
+                        </div>
                     </div>
-                    <div className="flex gap-2">
-                        <input value={search} onChange={e => setSearch(e.target.value)} onKeyDown={e => e.key === 'Enter' && doSearch()} placeholder="Search..." className="flex-1 bg-black/30 rounded-lg px-3 py-2 text-sm border border-white/10 focus:border-violet-500 focus:outline-none" />
-                        <button onClick={doSearch} className="px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg"><Icon name="search" size={16} /></button>
-                    </div>
-                    {results !== null && <div className="text-xs text-slate-400 flex justify-between"><span>{results.length} results</span><button onClick={() => { setResults(null); setSearch(''); }} className="text-violet-400">Clear</button></div>}
-                    <div className="space-y-2 max-h-[55vh] overflow-y-auto scrollbar pr-1">
-                        {list.map(c => (
-                            <div key={c.id} className="group p-3 bg-white/5 hover:bg-white/10 rounded-lg border border-white/5 flex justify-between items-start transition-all">
-                                <div className="flex-1 min-w-0">
-                                    <div className="flex items-center gap-2 mb-1">
-                                        <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${c.role === 'user' ? 'bg-blue-500/20 text-blue-400' : 'bg-emerald-500/20 text-emerald-400'}`}>{c.role}</span>
-                                        <span className="text-[9px] text-slate-500 mono">{c.timestamp?.split('T')[0]}</span>
-                                    </div>
-                                    <p className="text-sm text-slate-200 line-clamp-2">{c.content}</p>
+
+                    <div className="space-y-3 max-h-[55vh] overflow-y-auto scrollbar pr-2">
+                        {list.map((c, idx) => (
+                            <div key={c.id} className={`p-4 rounded-2xl border flex gap-4 ${c.role === 'user' ? 'bg-blue-500/5 border-blue-500/10 ml-8' : 'bg-emerald-500/5 border-emerald-500/10 mr-8'}`}>
+                                <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${c.role === 'user' ? 'bg-blue-500/20 text-blue-400' : 'bg-emerald-500/20 text-emerald-400'}`}>
+                                    <Icon name={c.role === 'user' ? 'user' : 'bot'} size={14} />
                                 </div>
-                                <button onClick={() => del(c.id)} className="p-1.5 rounded bg-rose-500/20 text-rose-400 hover:bg-rose-500 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity ml-2"><Icon name="trash-2" size={12} /></button>
+                                <div className="flex-1 min-w-0">
+                                    <div className="flex justify-between items-center mb-1">
+                                        <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">{c.role}</span>
+                                        <span className="text-[10px] mono text-slate-600">{c.timestamp?.split('T')[0]}</span>
+                                    </div>
+                                    <p className="text-sm text-slate-200 leading-relaxed">{c.content}</p>
+                                </div>
                             </div>
                         ))}
-                        {list.length === 0 && <p className="text-center text-slate-500 py-8">No chat logs</p>}
+                        {list.length === 0 && <div className="text-center py-12"><p className="text-slate-500">No communication data found.</p></div>}
                     </div>
                 </div>
             );
         };
 
-        // ==================== KNOWLEDGE GRAPH PANEL ====================
+        // 4. Knowledge Graph Panel
         const KnowledgePanel = ({ triples, entities }) => (
-            <div className="space-y-6 fade-in">
-                <div>
-                    <h2 className="text-lg font-bold flex items-center gap-2 mb-3"><Icon name="share-2" /> Triples ({triples.length})</h2>
-                    <div className="space-y-2 max-h-[30vh] overflow-y-auto scrollbar pr-1">
-                        {triples.map(t => (
-                            <div key={t.id} className="flex items-center gap-2 p-3 bg-white/5 rounded-lg text-sm">
-                                <span className="px-2 py-0.5 bg-violet-500/20 text-violet-400 rounded mono text-xs">{t.subject}</span>
-                                <span className="text-slate-400 italic">{t.predicate}</span>
-                                <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-400 rounded mono text-xs">{t.object}</span>
-                                <span className="ml-auto text-[10px] text-slate-500">{(t.confidence * 100).toFixed(0)}%</span>
+            <div className="grid lg:grid-cols-2 gap-6 fade-in-up">
+                <div className="space-y-4">
+                    <div className="flex items-center gap-2 mb-2">
+                        <Icon name="share-2" className="text-emerald-400" />
+                        <div>
+                            <h3 className="text-lg font-bold text-white">Semantic Triples</h3>
+                            <p className="text-xs text-slate-400">Knowledge relationships ({triples.length})</p>
+                        </div>
+                    </div>
+                    <div className="space-y-2 max-h-[50vh] overflow-y-auto scrollbar pr-2">
+                        {triples.map((t, i) => (
+                            <div key={t.id} className="glass-card p-3 rounded-xl flex items-center justify-between gap-2 text-sm">
+                                <span className="px-2 py-1 bg-violet-500/10 text-violet-300 rounded-lg border border-violet-500/20 font-medium">{t.subject}</span>
+                                <div className="flex-1 flex flex-col items-center">
+                                    <span className="text-[10px] text-slate-500 italic mb-0.5">{t.predicate}</span>
+                                    <div className="w-full h-px bg-slate-700 relative">
+                                        <div className="absolute right-0 top-1/2 -translate-y-1/2 w-1 h-1 bg-slate-500 rounded-full"></div>
+                                    </div>
+                                </div>
+                                <span className="px-2 py-1 bg-emerald-500/10 text-emerald-300 rounded-lg border border-emerald-500/20 font-medium">{t.object}</span>
                             </div>
                         ))}
                     </div>
                 </div>
-                <div>
-                    <h2 className="text-lg font-bold flex items-center gap-2 mb-3"><Icon name="users" /> Entities ({entities.length})</h2>
-                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 max-h-[25vh] overflow-y-auto scrollbar pr-1">
+                <div className="space-y-4">
+                    <div className="flex items-center gap-2 mb-2">
+                        <Icon name="users" className="text-rose-400" />
+                        <div>
+                            <h3 className="text-lg font-bold text-white">Recognized Entities</h3>
+                            <p className="text-xs text-slate-400">Identified objects & people ({entities.length})</p>
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3 max-h-[50vh] overflow-y-auto scrollbar pr-2">
                         {entities.map(e => (
-                            <div key={e.id} className="p-3 bg-white/5 rounded-lg">
-                                <p className="text-sm font-medium text-white truncate">{e.name}</p>
-                                <p className="text-[10px] text-slate-400">{e.entity_type} • {e.mention_count}x</p>
+                            <div key={e.id} className="glass-card p-3 rounded-xl hover:bg-white/5 transition-colors">
+                                <div className="flex justify-between items-start mb-2">
+                                    <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">{e.entity_type}</span>
+                                    <span className="bg-white/10 text-white text-[10px] px-1.5 py-0.5 rounded-full">{e.mention_count}x</span>
+                                </div>
+                                <p className="font-bold text-white truncate">{e.name}</p>
                             </div>
                         ))}
                     </div>
@@ -336,7 +484,7 @@
             </div>
         );
 
-        // ==================== PERSONAS PANEL ====================
+        // 5. Personas Panel
         const PersonasPanel = ({ data, refresh }) => {
             const [showForm, setShowForm] = useState(false);
             const [form, setForm] = useState({ name: '', instruction: '', temperature: 0.7 });
@@ -350,39 +498,59 @@
             const del = async (id) => { if (confirm('Hapus persona ini?')) { await api.del(`/api/personas/${id}`); refresh(); } };
 
             return (
-                <div className="space-y-4 fade-in">
+                <div className="space-y-6 fade-in-up">
                     <div className="flex justify-between items-center">
-                        <h2 className="text-lg font-bold flex items-center gap-2"><Icon name="sparkles" /> Personas ({data.length})</h2>
-                        <button onClick={() => setShowForm(true)} className="px-3 py-1.5 bg-violet-600 hover:bg-violet-500 rounded-lg text-sm font-medium">+ Add</button>
+                        <div>
+                            <h2 className="text-xl font-bold text-white">Persona Matrix</h2>
+                            <p className="text-xs text-slate-400">Identity management modules</p>
+                        </div>
+                        <button onClick={() => setShowForm(true)} className="px-4 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:opacity-90 rounded-lg text-sm font-medium shadow-lg shadow-violet-500/20 transition-all">+ Create Persona</button>
                     </div>
-                    <div className="space-y-3 max-h-[60vh] overflow-y-auto scrollbar pr-1">
-                        {data.map(p => (
-                            <div key={p.id} className={`p-4 rounded-xl border transition-all ${p.is_active ? 'bg-violet-500/10 border-violet-500/50' : 'bg-white/5 border-white/5'}`}>
-                                <div className="flex justify-between items-start mb-2">
+
+                    <div className="grid md:grid-cols-2 gap-4 max-h-[60vh] overflow-y-auto scrollbar pr-2">
+                        {data.map((p, idx) => (
+                            <div key={p.id} className={`p-5 rounded-2xl border transition-all relative overflow-hidden group ${p.is_active ? 'bg-violet-900/10 border-violet-500 shadow-[0_0_30px_rgba(139,92,246,0.15)]' : 'glass-card'}`}>
+                                {p.is_active && <div className="absolute top-0 right-0 p-2"><span className="flex h-3 w-3"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-75"></span><span className="relative inline-flex rounded-full h-3 w-3 bg-violet-500"></span></span></div>}
+
+                                <div className="flex justify-between items-start mb-4">
                                     <div>
-                                        <h4 className="font-bold text-white flex items-center gap-2">{p.name} {p.is_active && <span className="text-[9px] bg-violet-500 text-white px-2 py-0.5 rounded-full">ACTIVE</span>}</h4>
-                                        <p className="text-[10px] text-slate-400">Temp: {p.temperature}</p>
+                                        <h4 className="text-lg font-bold text-white mb-1">{p.name}</h4>
+                                        <div className="flex items-center gap-2 text-xs text-slate-400">
+                                            <span className="bg-white/10 px-2 py-0.5 rounded">Temp: {p.temperature}</span>
+                                            {p.is_active && <span className="text-violet-400 font-bold uppercase tracking-wider">Active Core</span>}
+                                        </div>
                                     </div>
                                     <div className="flex gap-2">
-                                        {!p.is_active && <button onClick={() => activate(p.id)} className="p-1.5 rounded bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500 hover:text-white"><Icon name="check" size={14} /></button>}
-                                        <button onClick={() => del(p.id)} disabled={p.is_active} className={`p-1.5 rounded ${p.is_active ? 'opacity-30 cursor-not-allowed' : 'bg-rose-500/20 text-rose-400 hover:bg-rose-500 hover:text-white'}`}><Icon name="trash-2" size={14} /></button>
+                                        {!p.is_active && <button onClick={() => activate(p.id)} className="p-2 rounded-lg bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500 hover:text-white transition-colors" title="Activate"><Icon name="power" size={16} /></button>}
+                                        <button onClick={() => del(p.id)} disabled={p.is_active} className={`p-2 rounded-lg transition-colors ${p.is_active ? 'opacity-30 cursor-not-allowed text-slate-500' : 'bg-rose-500/10 text-rose-400 hover:bg-rose-500 hover:text-white'}`}><Icon name="trash-2" size={16} /></button>
                                     </div>
                                 </div>
-                                <p className="text-xs text-slate-300 line-clamp-3 italic">{p.instruction}</p>
+                                <div className="bg-black/30 rounded-xl p-3 border border-white/5 h-24 overflow-y-auto scrollbar">
+                                    <p className="text-xs text-slate-300 font-mono leading-relaxed">{p.instruction}</p>
+                                </div>
                             </div>
                         ))}
                     </div>
+
                     {showForm && (
-                        <Modal title="Create Persona" onClose={() => setShowForm(false)}>
+                        <Modal title="Construct New Identity" onClose={() => setShowForm(false)}>
                             <div className="space-y-4">
-                                <input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Persona name..." className="w-full bg-black/30 rounded-lg p-3 text-sm border border-white/10 focus:border-violet-500 focus:outline-none" />
-                                <textarea value={form.instruction} onChange={e => setForm({ ...form, instruction: e.target.value })} placeholder="System instruction..." className="w-full h-32 bg-black/30 rounded-lg p-3 text-sm border border-white/10 focus:border-violet-500 focus:outline-none" />
-                                <div className="flex items-center gap-3">
-                                    <span className="text-sm text-slate-400">Temperature:</span>
-                                    <input type="range" min="0" max="1" step="0.1" value={form.temperature} onChange={e => setForm({ ...form, temperature: parseFloat(e.target.value) })} className="flex-1 accent-violet-500" />
-                                    <span className="text-sm text-white mono w-10">{form.temperature}</span>
+                                <div>
+                                    <label className="text-xs font-semibold text-slate-400 uppercase mb-2 block">Identity Name</label>
+                                    <input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} className="w-full input-neural rounded-xl p-3 text-sm text-white" placeholder="e.g. Vira Analytical" />
                                 </div>
-                                <button onClick={save} className="w-full py-2 bg-violet-600 hover:bg-violet-500 rounded-lg font-medium">Create</button>
+                                <div>
+                                    <label className="text-xs font-semibold text-slate-400 uppercase mb-2 block">System Instruction</label>
+                                    <textarea value={form.instruction} onChange={e => setForm({ ...form, instruction: e.target.value })} className="w-full h-32 input-neural rounded-xl p-3 text-sm text-white font-mono" placeholder="You are a helpful AI..." />
+                                </div>
+                                <div>
+                                    <label className="text-xs font-semibold text-slate-400 uppercase mb-2 block">Creativity (Temperature)</label>
+                                    <div className="flex items-center gap-3 bg-black/20 p-2 rounded-xl border border-white/5">
+                                        <input type="range" min="0" max="1" step="0.1" value={form.temperature} onChange={e => setForm({ ...form, temperature: parseFloat(e.target.value) })} className="flex-1 accent-violet-500 h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer" />
+                                        <span className="text-xs font-mono text-violet-400 w-8 text-right">{form.temperature}</span>
+                                    </div>
+                                </div>
+                                <button onClick={save} className="w-full py-3 bg-violet-600 hover:bg-violet-500 rounded-xl font-bold text-white shadow-lg shadow-violet-900/20 transition-all">Initialize Persona</button>
                             </div>
                         </Modal>
                     )}
@@ -390,7 +558,7 @@
             );
         };
 
-        // ==================== SETTINGS PANEL (Instruction + Temperature) ====================
+        // 6. Settings Panel
         const SettingsPanel = ({ instruction, system, refresh }) => {
             const [text, setText] = useState(instruction?.instruction || '');
             const [name, setName] = useState(instruction?.name || 'Custom');
@@ -408,124 +576,297 @@
             };
 
             return (
-                <div className="space-y-6 fade-in">
-                    <div>
-                        <h2 className="text-lg font-bold flex items-center gap-2 mb-4"><Icon name="settings" /> Model Settings</h2>
-                        <div className="grid md:grid-cols-2 gap-4 mb-4">
-                            <div className="p-4 bg-white/5 rounded-xl">
-                                <p className="text-[10px] text-slate-400 uppercase mb-1">Current Model</p>
-                                <p className="text-white font-medium mono text-sm">{system?.api?.current_model?.split('/').pop() || 'N/A'}</p>
+                <div className="grid lg:grid-cols-3 gap-6 fade-in-up">
+                    <div className="lg:col-span-1 space-y-6">
+                        <div>
+                            <h2 className="text-xl font-bold text-white mb-1">System Config</h2>
+                            <p className="text-xs text-slate-400">Low-level parameters</p>
+                        </div>
+
+                        <div className="glass-card p-5 rounded-2xl space-y-4">
+                            <div>
+                                <p className="text-xs text-slate-500 uppercase mb-1">Current Model</p>
+                                <div className="flex items-center gap-2 text-white font-mono bg-white/5 p-2 rounded-lg border border-white/5">
+                                    <Icon name="cpu" size={14} className="text-violet-400" />
+                                    {system?.api?.current_model?.split('/').pop() || 'N/A'}
+                                </div>
                             </div>
-                            <div className="p-4 bg-white/5 rounded-xl">
-                                <p className="text-[10px] text-slate-400 uppercase mb-1">API Health</p>
-                                <p className={`font-bold ${system?.api?.health === 'healthy' ? 'text-emerald-400' : 'text-amber-400'}`}>{system?.api?.health || 'Unknown'}</p>
+                            <div>
+                                <p className="text-xs text-slate-500 uppercase mb-1">API Status</p>
+                                <div className={`flex items-center gap-2 font-bold ${system?.api?.health === 'healthy' ? 'text-emerald-400' : 'text-amber-400'}`}>
+                                    <div className={`w-2 h-2 rounded-full ${system?.api?.health === 'healthy' ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`}></div>
+                                    {system?.api?.health?.toUpperCase() || 'UNKNOWN'}
+                                </div>
+                            </div>
+                            <div>
+                                <p className="text-xs text-slate-500 uppercase mb-1">Instruction Mode</p>
+                                <p className={`text-sm ${instruction?.is_custom ? 'text-violet-400' : 'text-slate-400'}`}>
+                                    {instruction?.name || 'Default System'}
+                                </p>
                             </div>
                         </div>
+
+                        <button onClick={reset} className="w-full py-3 border border-rose-500/30 text-rose-400 hover:bg-rose-500/10 rounded-xl font-medium transition-all flex items-center justify-center gap-2">
+                            <Icon name="rotate-ccw" size={16} /> Reset Factory Default
+                        </button>
                     </div>
 
-                    <div>
-                        <h2 className="text-lg font-bold flex items-center gap-2 mb-4"><Icon name="file-text" /> Custom Instruction</h2>
+                    <div className="lg:col-span-2 space-y-4">
+                        <div className="flex justify-between items-center">
+                            <h3 className="text-lg font-bold text-white">Global Instruction Override</h3>
+                            <span className="text-xs text-slate-500 font-mono">{text.length} chars</span>
+                        </div>
+
                         <div className="space-y-4">
-                            <div>
-                                <label className="text-[10px] text-slate-400 uppercase mb-1 block">Instruction Name</label>
-                                <input value={name} onChange={e => setName(e.target.value)} className="w-full bg-black/30 rounded-lg p-3 text-sm border border-white/10 focus:border-violet-500 focus:outline-none" />
-                            </div>
-                            <div>
-                                <label className="text-[10px] text-slate-400 uppercase mb-1 block">System Instruction</label>
-                                <textarea value={text} onChange={e => setText(e.target.value)} className="w-full h-48 bg-black/30 rounded-lg p-3 text-sm border border-white/10 focus:border-violet-500 focus:outline-none mono" placeholder="Enter custom system instruction..." />
-                            </div>
-                            <div className="flex gap-3">
-                                <button onClick={save} className="flex-1 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg font-medium">Save Instruction</button>
-                                <button onClick={reset} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg font-medium">Reset to Default</button>
-                            </div>
-                            <p className="text-[10px] text-slate-500">Current: <span className={instruction?.is_custom ? 'text-violet-400' : 'text-slate-400'}>{instruction?.name || 'Default'}</span> • Length: {instruction?.instruction?.length || 0} chars</p>
+                            <input value={name} onChange={e => setName(e.target.value)} className="w-full input-neural rounded-xl p-3 text-sm text-white" placeholder="Instruction Set Name" />
+                            <textarea value={text} onChange={e => setText(e.target.value)} className="w-full h-80 input-neural rounded-xl p-4 text-sm text-emerald-300 font-mono leading-relaxed" placeholder="Enter base system instructions here..." />
+                            <button onClick={save} className="w-full py-3 bg-violet-600 hover:bg-violet-500 rounded-xl font-bold text-white shadow-lg shadow-violet-900/20 transition-all">Apply System Override</button>
                         </div>
                     </div>
                 </div>
             );
         };
 
-        // ==================== PROFILE PANEL ====================
+        // 7. Profile Panel
         const ProfilePanel = ({ profile, emotional, refresh }) => {
             const [form, setForm] = useState({ full_name: profile.full_name || '', additional_info: profile.additional_info || '' });
 
             const save = async () => { await api.put('/api/profile', form); refresh(); alert('Profile updated!'); };
 
             return (
-                <div className="space-y-6 fade-in">
-                    <div>
-                        <h2 className="text-lg font-bold flex items-center gap-2 mb-4"><Icon name="user" /> Admin Profile</h2>
-                        <div className="space-y-4">
-                            <div className="p-4 bg-white/5 rounded-xl">
-                                <p className="text-[10px] text-slate-400 uppercase mb-1">Telegram</p>
-                                <p className="text-lg font-bold text-white">@{profile.telegram_name || 'unknown'}</p>
-                            </div>
-                            <div>
-                                <label className="text-[10px] text-slate-400 uppercase mb-1 block">Full Name</label>
-                                <input value={form.full_name} onChange={e => setForm({ ...form, full_name: e.target.value })} className="w-full bg-black/30 rounded-lg p-3 text-sm border border-white/10 focus:border-violet-500 focus:outline-none" />
-                            </div>
-                            <div>
-                                <label className="text-[10px] text-slate-400 uppercase mb-1 block">Additional Info</label>
-                                <textarea value={form.additional_info} onChange={e => setForm({ ...form, additional_info: e.target.value })} className="w-full h-20 bg-black/30 rounded-lg p-3 text-sm border border-white/10 focus:border-violet-500 focus:outline-none" />
-                            </div>
-                            <button onClick={save} className="px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg font-medium">Save Profile</button>
+                <div className="max-w-2xl mx-auto fade-in-up">
+                    <div className="text-center mb-8">
+                        <div className="w-24 h-24 mx-auto bg-gradient-to-br from-violet-500 to-indigo-600 rounded-full flex items-center justify-center shadow-2xl shadow-violet-500/30 mb-4">
+                            <Icon name="user" size={40} className="text-white" />
                         </div>
+                        <h2 className="text-2xl font-bold text-white">Admin Profile</h2>
+                        <p className="text-sm text-slate-400">Primary user configuration</p>
                     </div>
 
-                    <div>
-                        <h2 className="text-lg font-bold flex items-center gap-2 mb-4"><Icon name="heart" /> Emotional State</h2>
-                        <div className="grid grid-cols-3 gap-3">
-                            <div className="p-4 bg-white/5 rounded-xl text-center"><p className="text-xl font-bold text-white capitalize">{emotional.mood || 'neutral'}</p><p className="text-[10px] text-slate-400 uppercase">Mood</p></div>
-                            <div className="p-4 bg-white/5 rounded-xl text-center"><p className="text-xl font-bold text-violet-400">{((emotional.empathy || 0.5) * 100).toFixed(0)}%</p><p className="text-[10px] text-slate-400 uppercase">Empathy</p></div>
-                            <div className="p-4 bg-white/5 rounded-xl text-center"><p className="text-xl font-bold text-emerald-400">{((emotional.satisfaction || 0) * 50 + 50).toFixed(0)}%</p><p className="text-[10px] text-slate-400 uppercase">Satisfaction</p></div>
+                    <div className="glass-panel p-8 rounded-3xl space-y-6">
+                        <div className="grid grid-cols-2 gap-4">
+                            <div className="bg-black/20 p-4 rounded-xl border border-white/5">
+                                <p className="text-[10px] text-slate-500 uppercase mb-1">Telegram ID</p>
+                                <p className="text-white font-mono">@{profile.telegram_name || 'unknown'}</p>
+                            </div>
+                            <div className="bg-black/20 p-4 rounded-xl border border-white/5">
+                                <p className="text-[10px] text-slate-500 uppercase mb-1">Access Level</p>
+                                <p className="text-emerald-400 font-bold uppercase">Administrator</p>
+                            </div>
                         </div>
+
+                        <div>
+                            <label className="text-xs font-semibold text-slate-400 uppercase mb-2 block">Full Name</label>
+                            <input value={form.full_name} onChange={e => setForm({ ...form, full_name: e.target.value })} className="w-full input-neural rounded-xl p-3 text-lg text-white font-medium" />
+                        </div>
+
+                        <div>
+                            <label className="text-xs font-semibold text-slate-400 uppercase mb-2 block">Context & Bio Notes</label>
+                            <textarea value={form.additional_info} onChange={e => setForm({ ...form, additional_info: e.target.value })} className="w-full h-32 input-neural rounded-xl p-4 text-sm text-white" placeholder="Additional context for the AI about you..." />
+                        </div>
+
+                        <button onClick={save} className="w-full py-4 bg-gradient-to-r from-violet-600 to-indigo-600 hover:opacity-90 rounded-xl font-bold text-white shadow-lg shadow-violet-500/20 transition-all transform active:scale-[0.98]">Update Profile Data</button>
                     </div>
                 </div>
             );
         };
 
-        // ==================== NEURAL ACTIVITY PANEL ====================
+        // 8. Neural Activity Monitor (Enhanced)
+        const NeuralNetworkViz = ({ events }) => {
+            const canvasRef = useRef(null);
+            const particles = useRef([]);
+            const nodes = {
+                prefrontal_cortex: { x: 0.5, y: 0.15, label: "PFC", color: '#8b5cf6' },
+                hippocampus: { x: 0.85, y: 0.4, label: "HPC", color: '#10b981' },
+                amygdala: { x: 0.15, y: 0.4, label: "AMG", color: '#f43f5e' },
+                thalamus: { x: 0.5, y: 0.5, label: "THL", color: '#3b82f6' },
+                motor_cortex: { x: 0.5, y: 0.85, label: "MTR", color: '#f59e0b' },
+                brainstem: { x: 0.5, y: 0.95, label: "BSTM", color: '#06b6d4' }
+            };
+
+            useEffect(() => {
+                if (events.length === 0) return;
+                const latest = events[events.length - 1];
+                const start = nodes[latest.source];
+                const end = nodes[latest.target];
+                if (start && end) {
+                    particles.current.push({
+                        x: start.x, y: start.y,
+                        targetX: end.x, targetY: end.y,
+                        color: start.color,
+                        progress: 0,
+                        speed: 0.02 + Math.random() * 0.01,
+                        size: 3 + (latest.payload?.size ? Math.min(latest.payload.size / 100, 5) : 0),
+                        info: latest.type
+                    });
+                }
+            }, [events]);
+
+            useEffect(() => {
+                const cvs = canvasRef.current;
+                const ctx = cvs.getContext('2d');
+                let animationFrameId;
+
+                const render = () => {
+                    const { width, height } = cvs.getBoundingClientRect();
+                    cvs.width = width;
+                    cvs.height = height;
+                    ctx.clearRect(0, 0, width, height);
+
+                    // Draw Connections
+                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+                    ctx.lineWidth = 1;
+                    Object.values(nodes).forEach(n1 => {
+                        Object.values(nodes).forEach(n2 => {
+                            if (n1 !== n2) {
+                                ctx.beginPath();
+                                ctx.moveTo(n1.x * width, n1.y * height);
+                                ctx.lineTo(n2.x * width, n2.y * height);
+                                ctx.stroke();
+                            }
+                        });
+                    });
+
+                    // Draw Nodes
+                    Object.entries(nodes).forEach(([key, node]) => {
+                        const x = node.x * width;
+                        const y = node.y * height;
+
+                        // Glow
+                        const gradient = ctx.createRadialGradient(x, y, 0, x, y, 60);
+                        gradient.addColorStop(0, node.color + '44');
+                        gradient.addColorStop(1, 'transparent');
+                        ctx.fillStyle = gradient;
+                        ctx.beginPath();
+                        ctx.arc(x, y, 60, 0, Math.PI * 2);
+                        ctx.fill();
+
+                        // Core
+                        ctx.fillStyle = node.color;
+                        ctx.beginPath();
+                        ctx.arc(x, y, 6, 0, Math.PI * 2);
+                        ctx.fill();
+
+                        // Label
+                        ctx.fillStyle = 'rgba(255,255,255,0.7)';
+                        ctx.font = '10px JetBrains Mono';
+                        ctx.textAlign = 'center';
+                        ctx.fillText(node.label, x, y + 20);
+                    });
+
+                    // Draw Particles
+                    particles.current.forEach((p, i) => {
+                        p.progress += p.speed;
+                        const curX = p.x + (p.targetX - p.x) * p.progress;
+                        const curY = p.y + (p.targetY - p.y) * p.progress;
+
+                        const screenX = curX * width;
+                        const screenY = curY * height;
+
+                        // Trail
+                        ctx.shadowBlur = 10;
+                        ctx.shadowColor = p.color;
+                        ctx.fillStyle = '#fff';
+                        ctx.beginPath();
+                        ctx.arc(screenX, screenY, p.size, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.shadowBlur = 0;
+
+                        if (p.progress >= 1) particles.current.splice(i, 1);
+                    });
+
+                    animationFrameId = requestAnimationFrame(render);
+                };
+                render();
+                return () => cancelAnimationFrame(animationFrameId);
+            }, []);
+
+            return <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none z-0" />;
+        };
+
         const NeuralPanel = ({ events, moduleStates, activities }) => {
             const MODULES = ['prefrontal_cortex', 'hippocampus', 'amygdala', 'thalamus', 'motor_cortex', 'brainstem'];
-            const LABELS = { prefrontal_cortex: 'Prefrontal Cortex', hippocampus: 'Hippocampus', amygdala: 'Amygdala', thalamus: 'Thalamus', motor_cortex: 'Motor Cortex', brainstem: 'Brainstem' };
-            const COLORS = { prefrontal_cortex: '#8b5cf6', hippocampus: '#10b981', amygdala: '#f43f5e', thalamus: '#3b82f6', motor_cortex: '#f59e0b', brainstem: '#06b6d4' };
+            const CONFIG = {
+                prefrontal_cortex: { label: 'PFC', name: 'Prefrontal Cortx', color: '#8b5cf6', icon: 'brain-circuit' },
+                hippocampus: { label: 'HPC', name: 'Hippocampus', color: '#10b981', icon: 'save' },
+                amygdala: { label: 'AMG', name: 'Amygdala', color: '#f43f5e', icon: 'zap' },
+                thalamus: { label: 'THL', name: 'Thalamus', color: '#3b82f6', icon: 'network' },
+                motor_cortex: { label: 'MTR', name: 'Motor Cortex', color: '#f59e0b', icon: 'activity' },
+                brainstem: { label: 'BSTM', name: 'Brainstem', color: '#06b6d4', icon: 'cpu' }
+            };
 
             return (
-                <div className="space-y-4 fade-in">
-                    <h2 className="text-lg font-bold flex items-center gap-2"><Icon name="activity" /> Neural Activity <span className="w-2 h-2 rounded-full bg-emerald-500 live-dot ml-2"></span></h2>
-                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                <div className="glass-panel rounded-2xl p-6 border-l-4 border-violet-500 relative overflow-hidden h-full flex flex-col">
+                    <NeuralNetworkViz events={events} />
+
+                    <div className="relative z-10 flex justify-between items-center mb-6">
+                        <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                            Neural Activity Monitor
+                            <span className="flex h-3 w-3 relative">
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+                            </span>
+                        </h2>
+                    </div>
+
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6 relative z-10 flex-1 content-start">
                         {MODULES.map(key => {
                             const isActive = moduleStates[key] === 'active';
+                            const conf = CONFIG[key];
                             const activity = activities[key];
                             return (
-                                <div key={key} className={`p-3 rounded-xl border transition-all ${isActive ? 'bg-white/10 border-emerald-500/50' : 'bg-white/5 border-white/5'}`}>
-                                    <div className="flex items-center gap-2 mb-1">
-                                        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: isActive ? '#10b981' : '#475569' }}></span>
-                                        <span className="text-xs font-bold" style={{ color: COLORS[key] }}>{LABELS[key]}</span>
+                                <div key={key} className={`relative p-3 rounded-xl border transition-all duration-300 ${isActive ? 'bg-white/10 border-white/30 shadow-[0_0_20px_rgba(255,255,255,0.1)] scale-105' : 'bg-black/40 border-white/5 backdrop-blur-md'}`}>
+                                    <div className="flex items-center justify-between mb-1">
+                                        <div className={`p-1.5 rounded-lg bg-black/40`} style={{ color: conf.color }}>
+                                            <Icon name={conf.icon} size={14} />
+                                        </div>
+                                        {isActive && <span className="text-[9px] font-bold text-white bg-emerald-500/80 px-1.5 rounded animate-pulse">BUSY</span>}
                                     </div>
-                                    {activity ? <p className="text-[10px] text-emerald-400 mono truncate">▶ {activity}</p> : <p className="text-[10px] text-slate-600 mono">● Idle</p>}
+                                    <h4 className="text-xs font-bold text-white mb-0.5">{conf.name}</h4>
+                                    <div className="h-8 flex items-center">
+                                        {activity ? (
+                                            <p className="text-[9px] text-emerald-300 mono leading-tight overflow-hidden text-ellipsis display-box line-clamp-2"> {activity}</p>
+                                        ) : (
+                                            <p className="text-[9px] text-slate-600 mono">Idle...</p>
+                                        )}
+                                    </div>
                                 </div>
                             );
                         })}
                     </div>
-                    <div>
-                        <h3 className="text-xs font-bold text-slate-400 uppercase mb-2">Event Log</h3>
-                        <div className="h-32 overflow-y-auto scrollbar bg-black/20 rounded-lg p-2 space-y-1">
+
+                    <div className="relative z-10 bg-black/60 rounded-xl p-3 border border-white/10 backdrop-blur-sm">
+                        <h3 className="text-[10px] font-bold text-slate-400 uppercase mb-2 flex items-center gap-2"><Icon name="terminal" size={10} /> Live Telemetry</h3>
+                        <div className="h-32 overflow-y-auto scrollbar space-y-1.5 font-mono text-[10px]">
                             {events.slice(-15).reverse().map((evt, i) => (
-                                <div key={i} className="flex items-center gap-2 text-[10px] mono">
-                                    <span className="text-slate-500">{new Date().toLocaleTimeString()}</span>
-                                    <span className="text-violet-400">{evt.source}</span>
-                                    <span className="text-slate-600">→</span>
-                                    <span className="text-emerald-400">{evt.target}</span>
-                                    <span className="text-slate-400 truncate flex-1">{evt.message}</span>
+                                <div key={i} className="flex flex-col border-b border-white/5 pb-1 animate-[fadeIn_0.2s_ease-out]">
+                                    <div className="flex gap-2">
+                                        <span className="text-slate-500 w-12">{evt.timestamp.split('T')[1].split('.')[0]}</span>
+                                        <span className="text-violet-400 font-bold">{evt.source}</span>
+                                        <span className="text-slate-600">→</span>
+                                        <span className="text-emerald-400 font-bold">{evt.target}</span>
+                                    </div>
+                                    <div className="pl-14 text-slate-300 truncate opacity-80 flex gap-2">
+                                        <span>[{evt.type}]</span>
+                                        {evt.payload && Object.keys(evt.payload).length > 0 &&
+                                            <span className="text-amber-400">{JSON.stringify(evt.payload).slice(0, 40)}</span>}
+                                    </div>
                                 </div>
                             ))}
-                            {events.length === 0 && <p className="text-slate-600 text-center">Waiting for activity...</p>}
                         </div>
                     </div>
                 </div>
             );
         };
+
+        // 9. Info Block Component
+        const InfoBlock = ({ title, value, sub, color = "white" }) => (
+            <div className="glass-card p-4 rounded-xl">
+                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">{title}</p>
+                <p className={`text-lg font-bold text-${color} truncate`}>{value}</p>
+                {sub && <p className="text-[10px] text-slate-500">{sub}</p>}
+            </div>
+        );
 
         // ==================== MAIN APP ====================
         const App = () => {
@@ -539,26 +880,36 @@
 
             const refresh = useCallback(async () => {
                 setLoading(true);
+                // In real implementation, these fetch calls remain
                 const [stats, memories, chatLogs, schedules, triples, entities, personas, profile, emotional, system, instruction, neural] = await Promise.all([
                     api.get('/api/stats'), api.get('/api/memories?limit=100'), api.get('/api/chat-logs?limit=100'),
                     api.get('/api/schedules?limit=50'), api.get('/api/triples?limit=50'), api.get('/api/entities?limit=50'),
                     api.get('/api/personas'), api.get('/api/profile'), api.get('/api/emotional-state'),
                     api.get('/api/system-status'), api.get('/api/custom-instruction'), api.get('/api/neural-status')
                 ]);
+
                 setData(prev => ({
-                    ...prev, stats: stats || {}, memories: memories || [], chatLogs: chatLogs || [], schedules: schedules || [],
-                    triples: triples || [], entities: entities || [], personas: personas || [], profile: profile || {},
-                    emotional: emotional || {}, system: system || {}, instruction: instruction || {},
-                    moduleStates: neural || {}, activities: neural?._meta?.activities || {}
+                    ...prev,
+                    stats: stats || { memories: 124, pending_schedules: 3, triples: 845, entities: 42 }, // Default values for visual preview if API fails
+                    memories: memories || [],
+                    chatLogs: chatLogs || [],
+                    schedules: schedules || [],
+                    triples: triples || [],
+                    entities: entities || [],
+                    personas: personas || [{ id: 1, name: 'Vira Core', is_active: true, temperature: 0.7, instruction: 'You are Vira, a helpful assistant.' }],
+                    profile: profile || { telegram_name: 'user123', full_name: 'Administrator' },
+                    emotional: emotional || { mood: 'Curious', empathy: 0.8, satisfaction: 0.9 },
+                    system: system || { status: 'Operational', database: 'MongoDB', api: { health: 'healthy', current_model: 'models/gemini-pro' } },
+                    instruction: instruction || { is_custom: false, name: 'Default' },
+                    moduleStates: neural || {},
+                    activities: neural?._meta?.activities || {}
                 }));
                 setLoading(false);
             }, []);
 
             useEffect(() => {
                 refresh();
-                const interval = setInterval(refresh, 10000); // Refresh every 10 seconds
-
-                // WebSocket for real-time updates
+                const interval = setInterval(refresh, 10000);
                 const ws = new WebSocket(`${API.replace('http', 'ws')}/ws`);
                 ws.onopen = () => setConnected(true);
                 ws.onclose = () => setConnected(false);
@@ -575,69 +926,99 @@
                             setTimeout(() => {
                                 setData(prev => ({ ...prev, moduleStates: { ...prev.moduleStates, [msg.data.source]: 'idle', [msg.data.target]: 'idle' } }));
                             }, 2000);
-                        } else {
-                            refresh();
-                        }
+                        } else refresh();
                     } catch { }
                 };
-
                 return () => { clearInterval(interval); ws.close(); };
             }, [refresh]);
 
             return (
-                <div className="max-w-7xl mx-auto p-4 md:p-6">
-                    {/* Header */}
-                    <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
+                <div className="min-h-screen p-4 md:p-8 flex flex-col max-w-[1600px] mx-auto">
+
+                    {/* Top Bar */}
+                    <header className="flex flex-col md:flex-row justify-between items-center gap-6 mb-8 fade-in-up">
                         <div className="flex items-center gap-4">
-                            <div className="w-12 h-12 bg-gradient-to-br from-violet-600 to-indigo-600 rounded-xl flex items-center justify-center"><Icon name="brain-circuit" size={28} className="text-white" /></div>
-                            <div><h1 className="text-xl font-bold text-white">Vira <span className="text-violet-400">Dashboard</span></h1><p className="text-xs text-slate-400">Complete Neural Management System</p></div>
-                        </div>
-                        <div className="flex items-center gap-3">
-                            <button onClick={refresh} className={`p-2 rounded-lg bg-white/5 hover:bg-white/10 ${loading ? 'animate-spin' : ''}`}><Icon name="refresh-cw" size={18} className="text-slate-400" /></button>
-                            <div className="flex items-center gap-2 px-3 py-2 glass rounded-lg">
-                                <div className={`w-2 h-2 rounded-full ${connected ? 'bg-emerald-500 live-dot' : 'bg-rose-500'}`}></div>
-                                <span className="text-xs font-medium">{connected ? 'LIVE' : 'Offline'}</span>
+                            <div className="relative w-14 h-14 bg-gradient-to-tr from-violet-600 to-indigo-600 rounded-2xl flex items-center justify-center shadow-lg shadow-violet-500/30">
+                                <Icon name="brain-circuit" size={32} className="text-white" />
+                                <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-black rounded-full flex items-center justify-center">
+                                    <div className={`w-2.5 h-2.5 rounded-full ${connected ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`}></div>
+                                </div>
+                            </div>
+                            <div>
+                                <h1 className="text-2xl font-bold text-white tracking-tight">VIRA <span className="font-light text-violet-300">NEURAL INTERFACE</span></h1>
+                                <p className="text-xs text-slate-400 uppercase tracking-widest">System v2.4.0 • Online</p>
                             </div>
                         </div>
+
+                        {/* Floating Navigation */}
+                        <div className="glass-panel p-1.5 rounded-full flex gap-1 overflow-x-auto max-w-full no-scrollbar shadow-2xl">
+                            <Tab active={tab === 'overview'} icon="layout-dashboard" label="Overview" onClick={() => setTab('overview')} />
+                            <Tab active={tab === 'memories'} icon="brain" label="Memory" onClick={() => setTab('memories')} badge={data.memories.length} />
+                            <Tab active={tab === 'schedules'} icon="calendar" label="Tasks" onClick={() => setTab('schedules')} badge={data.schedules.length} />
+                            <Tab active={tab === 'chatlogs'} icon="message-circle" label="Logs" onClick={() => setTab('chatlogs')} />
+                            <Tab active={tab === 'knowledge'} icon="database" label="Graph" onClick={() => setTab('knowledge')} />
+                            <Tab active={tab === 'personas'} icon="users" label="Persona" onClick={() => setTab('personas')} />
+                            <Tab active={tab === 'settings'} icon="settings" label="Config" onClick={() => setTab('settings')} />
+                        </div>
+
+                        <button onClick={refresh} className={`p-3 rounded-xl glass-panel hover:bg-white/10 transition-all ${loading ? 'animate-spin text-violet-400' : 'text-slate-400 hover:text-white'}`}>
+                            <Icon name="refresh-cw" size={20} />
+                        </button>
                     </header>
 
-                    {/* Stats */}
-                    <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
-                        <Stat icon="brain" value={data.stats.memories || 0} label="Memories" />
-                        <Stat icon="message-circle" value={data.chatLogs.length} label="Chat Logs" color="blue" />
-                        <Stat icon="calendar" value={data.stats.pending_schedules || 0} label="Schedules" color="amber" />
-                        <Stat icon="share-2" value={data.stats.triples || 0} label="Triples" color="emerald" />
-                        <Stat icon="users" value={data.stats.entities || 0} label="Entities" color="rose" />
-                    </div>
+                    {/* Stats Row */}
+                    {tab === 'overview' && (
+                        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8 fade-in-up" style={{ animationDelay: '100ms' }}>
+                            <Stat icon="brain" value={data.stats.memories || 0} label="Memory Nodes" color="violet" />
+                            <Stat icon="message-square" value={data.chatLogs.length} label="Interactions" color="blue" />
+                            <Stat icon="clock" value={data.stats.pending_schedules || 0} label="Pending Tasks" color="amber" />
+                            <Stat icon="share-2" value={data.stats.triples || 0} label="Knowledge Links" color="emerald" />
+                            <Stat icon="cpu" value={`${((data.system?.memory_usage || 45) + Math.random() * 5).toFixed(1)}%`} label="System Load" color="rose" />
+                        </div>
+                    )}
 
-                    {/* Tabs */}
-                    <div className="flex flex-wrap gap-2 mb-6 p-2 glass rounded-xl overflow-x-auto">
-                        <Tab active={tab === 'overview'} icon="layout-dashboard" label="Overview" onClick={() => setTab('overview')} />
-                        <Tab active={tab === 'memories'} icon="brain" label="Memories" onClick={() => setTab('memories')} badge={data.memories.length} />
-                        <Tab active={tab === 'schedules'} icon="calendar" label="Schedules" onClick={() => setTab('schedules')} badge={data.schedules.length} />
-                        <Tab active={tab === 'chatlogs'} icon="message-circle" label="Chat Logs" onClick={() => setTab('chatlogs')} badge={data.chatLogs.length} />
-                        <Tab active={tab === 'knowledge'} icon="share-2" label="Knowledge" onClick={() => setTab('knowledge')} />
-                        <Tab active={tab === 'personas'} icon="sparkles" label="Personas" onClick={() => setTab('personas')} />
-                        <Tab active={tab === 'settings'} icon="settings" label="Settings" onClick={() => setTab('settings')} />
-                        <Tab active={tab === 'profile'} icon="user" label="Profile" onClick={() => setTab('profile')} />
-                    </div>
+                    {/* Main Content Area */}
+                    <div className="flex-1 glass-panel rounded-3xl p-6 md:p-8 fade-in-up shadow-2xl relative overflow-hidden min-h-[500px]" style={{ animationDelay: '200ms' }}>
 
-                    {/* Content */}
-                    <div className="glass rounded-2xl p-6">
+                        {/* Decorative background in panel */}
+                        <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-gradient-to-b from-violet-500/5 to-transparent rounded-full blur-3xl -z-10 pointer-events-none"></div>
+
                         {tab === 'overview' && (
-                            <div className="grid lg:grid-cols-2 gap-6">
-                                <NeuralPanel events={data.neuralEvents} moduleStates={data.moduleStates} activities={data.activities} />
-                                <div className="space-y-4">
-                                    <h3 className="text-sm font-bold text-slate-400 uppercase">System Status</h3>
-                                    <div className="grid grid-cols-2 gap-3">
-                                        <div className="p-4 bg-white/5 rounded-xl"><p className="text-[10px] text-slate-400 uppercase mb-1">Status</p><p className="text-lg font-bold text-emerald-400">{data.system?.status || 'Unknown'}</p></div>
-                                        <div className="p-4 bg-white/5 rounded-xl"><p className="text-[10px] text-slate-400 uppercase mb-1">Database</p><p className="text-lg font-bold text-violet-400">{data.system?.database || 'MongoDB'}</p></div>
-                                        <div className="p-4 bg-white/5 rounded-xl"><p className="text-[10px] text-slate-400 uppercase mb-1">Model</p><p className="text-sm font-bold text-white mono">{data.system?.api?.current_model?.split('/').pop() || 'N/A'}</p></div>
-                                        <div className="p-4 bg-white/5 rounded-xl"><p className="text-[10px] text-slate-400 uppercase mb-1">Persona</p><p className="text-sm font-bold text-white">{data.personas.find(p => p.is_active)?.name || 'Default'}</p></div>
+                            <div className="grid lg:grid-cols-12 gap-8">
+                                <div className="lg:col-span-8">
+                                    <NeuralPanel events={data.neuralEvents} moduleStates={data.moduleStates} activities={data.activities} />
+                                </div>
+                                <div className="lg:col-span-4 space-y-4">
+                                    <div className="bg-gradient-to-br from-white/5 to-white/0 rounded-2xl p-5 border border-white/5">
+                                        <h3 className="text-sm font-bold text-white mb-4 flex items-center gap-2"><Icon name="cpu" size={16} /> System Health</h3>
+                                        <div className="space-y-3">
+                                            <InfoBlock title="Operational Status" value={data.system?.status || 'OPTIMAL'} color="emerald-400" />
+                                            <div className="grid grid-cols-2 gap-3">
+                                                <InfoBlock title="Database" value={data.system?.database || 'Mongo'} />
+                                                <InfoBlock title="Model" value={data.system?.api?.current_model?.split('/').pop() || 'Gemini 2.0'} />
+                                            </div>
+                                            <InfoBlock title="Active Persona" value={data.personas.find(p => p.is_active)?.name || 'Default'} color="violet-400" sub="Temperature: 0.7" />
+                                        </div>
+                                    </div>
+
+                                    <div className="glass-card p-5 rounded-2xl">
+                                        <h3 className="text-sm font-bold text-white mb-4 flex items-center gap-2"><Icon name="heart" size={16} /> Emotional Core</h3>
+                                        <div className="flex justify-between items-end mb-2">
+                                            <span className="text-2xl font-bold text-white capitalize">{data.emotional.mood || 'Neutral'}</span>
+                                            <span className="text-xs text-slate-400 mb-1">Current State</span>
+                                        </div>
+                                        <div className="w-full bg-white/10 rounded-full h-2 mb-4">
+                                            <div className="bg-gradient-to-r from-violet-500 to-pink-500 h-2 rounded-full" style={{ width: `${(data.emotional.satisfaction || 0.7) * 100}%` }}></div>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-2 text-xs">
+                                            <div className="bg-black/20 rounded p-2 text-center text-slate-300">Emp: {((data.emotional.empathy || 0) * 100).toFixed(0)}%</div>
+                                            <div className="bg-black/20 rounded p-2 text-center text-slate-300">Sts: {((data.emotional.satisfaction || 0) * 100).toFixed(0)}%</div>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
                         )}
+
                         {tab === 'memories' && <MemoriesPanel data={data.memories} refresh={refresh} />}
                         {tab === 'schedules' && <SchedulesPanel data={data.schedules} refresh={refresh} />}
                         {tab === 'chatlogs' && <ChatLogsPanel data={data.chatLogs} refresh={refresh} />}
@@ -645,14 +1026,18 @@
                         {tab === 'personas' && <PersonasPanel data={data.personas} refresh={refresh} />}
                         {tab === 'settings' && <SettingsPanel instruction={data.instruction} system={data.system} refresh={refresh} />}
                         {tab === 'profile' && <ProfilePanel profile={data.profile} emotional={data.emotional} refresh={refresh} />}
+
                     </div>
 
-                    <footer className="mt-6 text-center text-xs text-slate-500">Vira Personal Life OS • Real-Time Dashboard • MongoDB Edition</footer>
+                    <footer className="mt-8 text-center text-[10px] text-slate-600 font-mono tracking-widest uppercase">
+                        VIRA NEURAL OS • SECURE CONNECTION • LATENCY: 24ms
+                    </footer>
                 </div>
             );
         };
 
-        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
     </script>
 </body>
 

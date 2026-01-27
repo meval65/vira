@@ -4,10 +4,15 @@ Thalamus Module - Session and Context Management for Vira.
 This module handles:
 - Chat session management with MongoDB chat_logs
 - Hybrid context retrieval (short-term + vector-based long-term)
+- Global context injection from memory compression
 - Proactive insight generation
 - Weather context integration
+- Intelligent context window management
 
-Refactored to use MongoDB for session storage with automatic TTL expiry.
+Refactored to:
+- Prioritize Global Context in context building
+- Implement context hierarchy system
+- Support dynamic persona context
 """
 
 import os
@@ -27,7 +32,7 @@ from enum import Enum
 import PIL.Image
 from google.genai import types
 
-from src.brainstem import METEOSOURCE_API_KEY, NeuralEventBus
+from src.brainstem import METEOSOURCE_API_KEY, NeuralEventBus, get_openrouter_client
 from src.db.mongo_client import get_mongo_client, MongoDBClient
 
 
@@ -69,6 +74,18 @@ class SessionMessage:
     embedding: Optional[List[float]] = None
 
 
+class ContextPriority(int, Enum):
+    """Context section priorities (higher = more important)."""
+    GLOBAL_CONTEXT = 100      # Compressed memory summary - highest priority
+    PERSONA_CONTEXT = 90      # Active persona information
+    SCHEDULE_CONTEXT = 80     # Upcoming schedules
+    RELEVANT_MEMORIES = 70    # Query-specific memories
+    RELEVANT_HISTORY = 60     # Similar past conversations
+    INTENT_ANALYSIS = 50      # Current intent analysis
+    TIME_CONTEXT = 40         # Current datetime
+    WEATHER_CONTEXT = 30      # Weather information
+
+
 class Thalamus:
     """
     Session and context manager using MongoDB.
@@ -76,6 +93,7 @@ class Thalamus:
     Implements hybrid retrieval:
     - Short-term: Last 20 messages from chat_logs
     - Long-term: 3-5 semantically similar messages via NumPy vector search
+    - Global Context: Compressed memory summary (highest priority)
     """
     
     MAX_SHORT_TERM: int = 20
@@ -86,6 +104,9 @@ class Thalamus:
     DEFAULT_LAT: float = -7.6398581
     DEFAULT_LON: float = 112.2395766
     WEATHER_CACHE_TTL: int = 1800
+    
+    # Context window management
+    MAX_CONTEXT_TOKENS: int = 4000  # Approximate token budget
 
     INACTIVITY_PROMPTS = [
         "Hei, lu kemana aja? Udah lama gak ngobrol nih. Semua baik-baik aja kan?",
@@ -117,11 +138,12 @@ class Thalamus:
         self._weather_cache: Dict[str, Any] = {}
         self._weather_timestamp: Optional[datetime.datetime] = None
         self._context_cache: Dict[str, Any] = {}
+        self._global_context_cache: Optional[str] = None
+        self._global_context_timestamp: Optional[datetime.datetime] = None
 
     async def initialize(self) -> None:
         """Initialize MongoDB connection for session storage."""
         self._mongo = get_mongo_client()
-        # Connection already established by hippocampus
         await self._load_metadata()
 
     async def _load_metadata(self) -> None:
@@ -175,12 +197,10 @@ class Thalamus:
 
     def get_history_for_model(self) -> List[types.Content]:
         """Get session history formatted for Gemini model (async wrapper needed)."""
-        # This will be called from async context, return empty for sync access
-        # The actual implementation should be called via async method
         return []
 
     async def get_history_for_model_async(self) -> List[types.Content]:
-        """Get session history formatted for Gemini model."""
+        """Get session history formatted for model."""
         messages = await self.get_session(limit=self.MAX_SHORT_TERM)
         history = []
         
@@ -254,12 +274,6 @@ class Thalamus:
     ) -> Dict[str, List[SessionMessage]]:
         """
         Retrieve hybrid context: short-term recent + long-term relevant.
-        
-        Returns:
-            {
-                "short_term": [last 20 messages],
-                "long_term": [3-5 relevant older messages]
-            }
         """
         await NeuralEventBus.set_activity("thalamus", "Building Hybrid Context")
         
@@ -283,15 +297,13 @@ class Thalamus:
         # Long-term: Semantically relevant older messages
         long_term = []
         if query_embedding and oldest_short_term:
-            # Fetch older messages with embeddings
             long_term_cursor = self._mongo.chat_logs.find({
                 "timestamp": {"$lt": oldest_short_term},
                 "embedding": {"$exists": True, "$ne": None}
-            }).limit(100)  # Limit to last 100 for performance
+            }).limit(100)
             
             long_term_docs = await long_term_cursor.to_list(length=100)
             
-            # Score by similarity
             scored = []
             for doc in long_term_docs:
                 emb = doc.get("embedding")
@@ -300,7 +312,6 @@ class Thalamus:
                     if sim >= self.SIMILARITY_THRESHOLD:
                         scored.append((doc, sim))
             
-            # Sort by similarity descending
             scored.sort(key=lambda x: x[1], reverse=True)
             
             for doc, _ in scored[:long_term_limit]:
@@ -325,10 +336,7 @@ class Thalamus:
         top_k: int = 5,
         min_similarity: float = 0.5
     ) -> List[SessionMessage]:
-        """
-        Synchronous version for backward compatibility.
-        Note: This returns empty list in sync context. Use get_hybrid_context instead.
-        """
+        """Synchronous version - returns empty list. Use async version."""
         return []
 
     async def get_relevant_history_async(
@@ -341,7 +349,6 @@ class Thalamus:
         if not query_embedding:
             return []
         
-        # Fetch messages with embeddings
         cursor = self._mongo.chat_logs.find({
             "embedding": {"$exists": True, "$ne": None}
         }).limit(200)
@@ -408,6 +415,21 @@ class Thalamus:
     def mark_memory_analysis_done(self, count: int) -> None:
         self._metadata["last_analysis_count"] = count
 
+    async def _get_global_context(self) -> Optional[str]:
+        """Get global context from hippocampus with caching."""
+        # Check cache (valid for 5 minutes)
+        if (self._global_context_cache and self._global_context_timestamp and
+            (datetime.datetime.now() - self._global_context_timestamp).total_seconds() < 300):
+            return self._global_context_cache
+        
+        # Fetch from hippocampus
+        global_ctx = await self._hippocampus.get_global_context()
+        if global_ctx:
+            self._global_context_cache = global_ctx
+            self._global_context_timestamp = datetime.datetime.now()
+        
+        return global_ctx
+
     async def build_context(
         self,
         relevant_memories: List[Dict],
@@ -416,17 +438,50 @@ class Thalamus:
         user_metrics: Optional[Dict] = None,
         query_embedding: Optional[List[float]] = None
     ) -> str:
-        """Build comprehensive context for response generation."""
+        """
+        Build comprehensive context for response generation.
+        
+        Context is built with priority hierarchy:
+        1. Global Context (compressed memory summary) - HIGHEST
+        2. Active Persona Context
+        3. Schedule Context
+        4. Relevant Memories
+        5. Relevant History
+        6. Intent Analysis
+        7. Time/Weather Context - LOWEST
+        """
         await NeuralEventBus.emit("thalamus", "prefrontal_cortex", "context_ready")
-        sections = []
-
+        
+        # Collect context sections with priorities
+        context_sections: List[Dict[str, Any]] = []
+        
+        # 1. GLOBAL CONTEXT (Highest Priority)
+        global_ctx = await self._get_global_context()
+        if global_ctx:
+            context_sections.append({
+                "priority": ContextPriority.GLOBAL_CONTEXT.value,
+                "header": "[GLOBAL CONTEXT - USER PROFILE]",
+                "content": global_ctx
+            })
+        
+        # 2. SYSTEM TIME
         now = datetime.datetime.now()
-        sections.append(f"[SYSTEM TIME]\n{now.strftime('%Y-%m-%d %H:%M:%S')} ({now.strftime('%A')})")
-
+        context_sections.append({
+            "priority": ContextPriority.TIME_CONTEXT.value,
+            "header": "[SYSTEM TIME]",
+            "content": f"{now.strftime('%Y-%m-%d %H:%M:%S')} ({now.strftime('%A')})"
+        })
+        
+        # 3. WEATHER
         weather = await self._get_weather()
         if weather:
-            sections.append(f"[WEATHER]\n{weather}")
-
+            context_sections.append({
+                "priority": ContextPriority.WEATHER_CONTEXT.value,
+                "header": "[WEATHER]",
+                "content": weather
+            })
+        
+        # 4. ADMIN PROFILE
         profile = self._hippocampus.admin_profile
         if profile.telegram_name or profile.additional_info:
             profile_parts = []
@@ -434,8 +489,13 @@ class Thalamus:
                 profile_parts.append(f"Name: {profile.telegram_name}")
             if profile.additional_info:
                 profile_parts.append(f"Info: {profile.additional_info}")
-            sections.append(f"[ADMIN PROFILE]\n" + "\n".join(profile_parts))
-
+            context_sections.append({
+                "priority": ContextPriority.PERSONA_CONTEXT.value - 5,  # Slightly lower than persona
+                "header": "[ADMIN PROFILE]",
+                "content": "\n".join(profile_parts)
+            })
+        
+        # 5. TIME GAP (if significant)
         last_interaction = self._metadata.get("last_interaction")
         if last_interaction:
             try:
@@ -443,21 +503,36 @@ class Thalamus:
                 gap = now - last_dt
                 if gap.total_seconds() > 3600:
                     hours = int(gap.total_seconds() / 3600)
-                    sections.append(f"[TIME GAP]\nLast interaction: {hours} hours ago")
+                    context_sections.append({
+                        "priority": ContextPriority.TIME_CONTEXT.value - 5,
+                        "header": "[TIME GAP]",
+                        "content": f"Last interaction: {hours} hours ago"
+                    })
             except Exception:
                 pass
-
+        
+        # 6. SCHEDULES
         if schedule_context:
-            sections.append(f"[SCHEDULES]\n{schedule_context}")
-
+            context_sections.append({
+                "priority": ContextPriority.SCHEDULE_CONTEXT.value,
+                "header": "[UPCOMING SCHEDULES]",
+                "content": schedule_context
+            })
+        
+        # 7. RELEVANT MEMORIES
         if relevant_memories:
             mem_lines = []
             for m in relevant_memories[:5]:
                 summary = m.get("summary", "")[:100]
                 mem_type = m.get("memory_type", "general")
                 mem_lines.append(f"- [{mem_type}] {summary}")
-            sections.append(f"[RELEVANT MEMORIES]\n" + "\n".join(mem_lines))
-
+            context_sections.append({
+                "priority": ContextPriority.RELEVANT_MEMORIES.value,
+                "header": "[RELEVANT MEMORIES]",
+                "content": "\n".join(mem_lines)
+            })
+        
+        # 8. INTENT ANALYSIS
         if intent_data:
             intent_parts = []
             if intent_data.get("intent_type"):
@@ -467,27 +542,63 @@ class Thalamus:
             if intent_data.get("sentiment"):
                 intent_parts.append(f"Sentiment: {intent_data['sentiment']}")
             if intent_parts:
-                sections.append(f"[INTENT ANALYSIS]\n" + "\n".join(intent_parts))
-
-        # Add hybrid context (long-term relevant messages)
+                context_sections.append({
+                    "priority": ContextPriority.INTENT_ANALYSIS.value,
+                    "header": "[INTENT ANALYSIS]",
+                    "content": "\n".join(intent_parts)
+                })
+        
+        # 9. RELEVANT PAST CONVERSATIONS (Hybrid context)
         if query_embedding:
             hybrid = await self.get_hybrid_context(query_embedding, short_term_limit=0, long_term_limit=5)
             if hybrid.get("long_term"):
                 lt_lines = []
                 for msg in hybrid["long_term"][:3]:
                     time_str = msg.timestamp.strftime("%d/%m %H:%M")
-                    role = "User" if msg.role == "user" else "Vira"
+                    role = "User" if msg.role == "user" else "AI"
                     content = msg.content[:150] + "..." if len(msg.content) > 150 else msg.content
                     lt_lines.append(f"[{time_str}] {role}: {content}")
-                sections.append(f"[RELEVANT PAST CONVERSATIONS]\n" + "\n".join(lt_lines))
-
+                context_sections.append({
+                    "priority": ContextPriority.RELEVANT_HISTORY.value,
+                    "header": "[RELEVANT PAST CONVERSATIONS]",
+                    "content": "\n".join(lt_lines)
+                })
+        
+        # 10. CONVERSATION SUMMARY
         summary = self._metadata.get("summary", "")
         if summary:
-            sections.append(f"[CONVERSATION CONTEXT]\n{summary[:300]}")
-
-        return "\n\n".join(sections)
+            context_sections.append({
+                "priority": ContextPriority.INTENT_ANALYSIS.value - 5,
+                "header": "[CONVERSATION CONTEXT]",
+                "content": summary[:300]
+            })
+        
+        # Sort by priority (descending) and build final context
+        context_sections.sort(key=lambda x: x["priority"], reverse=True)
+        
+        # Build context string with intelligent truncation
+        final_sections = []
+        estimated_tokens = 0
+        
+        for section in context_sections:
+            section_text = f"{section['header']}\n{section['content']}"
+            section_tokens = len(section_text) // 4  # Rough token estimate
+            
+            if estimated_tokens + section_tokens <= self.MAX_CONTEXT_TOKENS:
+                final_sections.append(section_text)
+                estimated_tokens += section_tokens
+            else:
+                # Truncate section to fit remaining budget
+                remaining_chars = (self.MAX_CONTEXT_TOKENS - estimated_tokens) * 4
+                if remaining_chars > 100:
+                    truncated = section_text[:remaining_chars] + "..."
+                    final_sections.append(truncated)
+                break
+        
+        return "\n\n".join(final_sections)
 
     async def _get_weather(self) -> Optional[str]:
+        """Get weather information with caching."""
         if self._is_weather_cached():
             return self._weather_cache.get("formatted")
 
@@ -524,6 +635,7 @@ class Thalamus:
         return age < self.WEATHER_CACHE_TTL
 
     async def check_proactive_triggers(self) -> Optional[str]:
+        """Check for proactive message triggers."""
         insights = await self._gather_insights()
         if not insights:
             return None
@@ -537,6 +649,7 @@ class Thalamus:
         return best.message
 
     async def _gather_insights(self) -> List[ProactiveInsight]:
+        """Gather all potential proactive insights."""
         insights = []
 
         inactivity = await self._check_inactivity()
@@ -562,18 +675,52 @@ class Thalamus:
             hours_since = (datetime.datetime.now() - last_dt).total_seconds() / 3600
 
             if hours_since >= self.INACTIVITY_THRESHOLD_HOURS:
+                message = await self._generate_proactive_message(hours_since)
                 return ProactiveInsight(
                     insight_type=InsightType.INACTIVITY,
                     priority=InsightPriority.MEDIUM,
-                    message=random.choice(self.INACTIVITY_PROMPTS),
-                    context={"hours_inactive": hours_since}
+                    message=message,
+                    context={"hours_inactive": hours_since, "ai_generated": True}
                 )
         except Exception:
             pass
 
         return None
 
+    async def _generate_proactive_message(self, hours_inactive: float) -> str:
+        try:
+            global_ctx = await self._get_global_context()
+            
+            days_inactive = int(hours_inactive / 24)
+            time_desc = f"{days_inactive} hari" if days_inactive > 0 else f"{int(hours_inactive)} jam"
+            
+            context_info = ""
+            if global_ctx:
+                context_info = f"\n\nInformasi tentang user:\n{global_ctx[:500]}"
+            
+            prompt = f"""Kamu adalah Vira, AI assistant yang akrab dengan user. User sudah tidak chat selama {time_desc}.
+
+Buat pesan singkat (1-2 kalimat) untuk menyapa user dengan gaya santai dan akrab. Gunakan bahasa gaul Indonesia.
+Jangan terlalu formal. Bisa tanyakan kabar atau apa yang sedang dikerjakan.{context_info}
+
+Pesan:"""
+
+            client = get_openrouter_client()
+            response = await client.chat_completion(
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=100,
+                temperature=0.8,
+                preferred_tier="tier_2"
+            )
+            
+            return response.content.strip()
+            
+        except Exception as e:
+            print(f"⚠️ Proactive message generation failed: {e}")
+            return random.choice(self.INACTIVITY_PROMPTS)
+
     async def _check_scheduled_reminders(self) -> List[ProactiveInsight]:
+        """Check for due scheduled reminders."""
         insights = []
         pending = await self._hippocampus.get_pending_schedules(limit=5)
 
@@ -596,6 +743,7 @@ class Thalamus:
         return insights
 
     async def _check_knowledge_gaps(self) -> Optional[ProactiveInsight]:
+        """Check for knowledge gaps about the user."""
         stats = await self._hippocampus.get_memory_stats()
         if stats.get("active", 0) < 5:
             return ProactiveInsight(
@@ -607,6 +755,7 @@ class Thalamus:
         return None
 
     def _can_send_insight(self, insight_type: InsightType) -> bool:
+        """Check if an insight type can be sent (cooldown check)."""
         key = insight_type.value
         last_sent = self._insight_cache.get(key)
         if not last_sent:
@@ -616,9 +765,11 @@ class Thalamus:
         return minutes_since >= self.COOLDOWN_MINUTES
 
     def _mark_insight_sent(self, insight_type: InsightType) -> None:
+        """Mark an insight type as sent."""
         self._insight_cache[insight_type.value] = datetime.datetime.now()
 
     def get_last_interaction(self) -> Optional[datetime.datetime]:
+        """Get the last interaction timestamp."""
         last_str = self._metadata.get("last_interaction")
         if last_str:
             try:
@@ -628,6 +779,7 @@ class Thalamus:
         return None
 
     async def should_initiate_contact(self) -> bool:
+        """Check if the system should proactively contact the user."""
         last = self.get_last_interaction()
         if not last:
             return False
@@ -643,6 +795,7 @@ class Thalamus:
         return False
 
     def format_time_gap(self, last_time: Optional[datetime.datetime]) -> str:
+        """Format time gap for display."""
         if not last_time:
             return "First interaction"
 
@@ -656,3 +809,18 @@ class Thalamus:
         else:
             days = int(hours / 24)
             return f"{days} days ago"
+
+    async def get_context_stats(self) -> Dict[str, Any]:
+        """Get context building statistics."""
+        global_ctx = await self._get_global_context()
+        
+        return {
+            "has_global_context": global_ctx is not None,
+            "global_context_length": len(global_ctx) if global_ctx else 0,
+            "max_context_tokens": self.MAX_CONTEXT_TOKENS,
+            "weather_cached": self._is_weather_cached(),
+            "last_interaction": self._metadata.get("last_interaction"),
+            "insight_cooldowns": {
+                k: v.isoformat() for k, v in self._insight_cache.items()
+            }
+        }

@@ -5,6 +5,20 @@ This module provides the core database connection and collection management
 for all brain modules. It uses Motor (async MongoDB driver) for compatibility
 with the asyncio-based architecture.
 
+Collections:
+- memories: Long-term memory storage with embeddings
+- chat_logs: Conversation history with TTL
+- knowledge_graph: Entity relationship triples
+- entities: Named entity registry
+- schedules: Scheduled reminders and tasks
+- admin_profile: User profile information
+- emotional_state: AI emotional state tracking
+- personas: Dynamic persona configurations
+- global_context: Compressed memory summaries
+- compression_log: Memory compression history
+- session_metadata: Session state tracking
+- memory_evolution_log: Memory change history
+
 Fixed to handle multiple event loops (main app + FastAPI dashboard thread).
 """
 
@@ -122,6 +136,26 @@ class MongoDBClient:
         """Access the memory_evolution_log collection."""
         return self.db["memory_evolution_log"]
     
+    @property
+    def global_context(self):
+        """Access the global_context collection (compressed memory summaries)."""
+        return self.db["global_context"]
+    
+    @property
+    def compression_log(self):
+        """Access the compression_log collection (compression history)."""
+        return self.db["compression_log"]
+    
+    @property
+    def session_metadata(self):
+        """Access the session_metadata collection."""
+        return self.db["session_metadata"]
+    
+    @property
+    def conversation_topics(self):
+        """Access the conversation_topics collection."""
+        return self.db["conversation_topics"]
+    
     # ==================== COLLECTION SETUP ====================
     
     async def _setup_collections(self) -> None:
@@ -133,6 +167,7 @@ class MongoDBClient:
             IndexModel([("priority", DESCENDING), ("last_used", DESCENDING)]),
             IndexModel([("status", ASCENDING), ("type", ASCENDING)]),
             IndexModel([("entity", ASCENDING)], sparse=True),
+            IndexModel([("is_compressed", ASCENDING)]),  # New: for compression tracking
         ])
         
         # --- chat_logs (with TTL) ---
@@ -167,6 +202,23 @@ class MongoDBClient:
         await self._create_indexes("personas", [
             IndexModel([("name", ASCENDING)], unique=True),
             IndexModel([("is_active", ASCENDING)]),
+        ])
+        
+        # --- global_context ---
+        await self._create_indexes("global_context", [
+            IndexModel([("version", DESCENDING)]),
+        ])
+        
+        # --- compression_log ---
+        await self._create_indexes("compression_log", [
+            IndexModel([("timestamp", DESCENDING)]),
+        ])
+        
+        # --- conversation_topics ---
+        await self._create_indexes("conversation_topics", [
+            IndexModel([("topic", ASCENDING)]),
+            IndexModel([("last_mentioned", DESCENDING)]),
+            IndexModel([("frequency", DESCENDING)]),
         ])
         
         print("  ✓ MongoDB indexes initialized")
