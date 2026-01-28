@@ -5,26 +5,34 @@ import re
 import hashlib
 import math
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional, Any, Tuple
+from typing import List, Dict, Optional, Any, Tuple, Callable
 from dataclasses import dataclass, field, asdict
 from enum import Enum
-from collections import defaultdict
+from collections import defaultdict, deque
+from functools import wraps
+import time
 
 import httpx
 import PIL.Image
-
 from dateutil import parser as date_parser
 
-from src.brainstem import (
-    DEFAULT_PERSONA_INSTRUCTION,
-    CHAT_INTERACTION_ANALYSIS_INSTRUCTION, EXTRACTION_INSTRUCTION,
-    MemoryType, AllAPIExhaustedError, OLLAMA_BASE_URL, EMBEDDING_MODEL,
-    NeuralEventBus, get_openrouter_client, OpenRouterClient
+from src.brain.brainstem import (
+    MemoryType,
+    AllAPIExhaustedError,
+    OLLAMA_BASE_URL,
+    EMBEDDING_MODEL,
+    NeuralEventBus,
+    OpenRouterClient
 )
-from src.hippocampus import Hippocampus, Memory
-from src.amygdala import Amygdala, PlanProgressState
-from src.thalamus import Thalamus
-from src.parietal_lobe import ParietalLobe
+from src.brain.constants import (
+    DEFAULT_PERSONA_INSTRUCTION,
+    EXTRACTION_INSTRUCTION
+)
+from src.brain.hippocampus import Hippocampus, Memory
+from src.brain.amygdala import Amygdala, PlanProgressState
+from src.brain.thalamus import Thalamus
+from src.brain.parietal_lobe import ParietalLobe
+
 
 class PlanStatus(str, Enum):
     PENDING = "pending"
@@ -34,12 +42,14 @@ class PlanStatus(str, Enum):
     CANCELLED = "cancelled"
     PAUSED = "paused"
 
+
 class StepStatus(str, Enum):
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
     FAILED = "failed"
     SKIPPED = "skipped"
+
 
 @dataclass
 class TaskStep:
@@ -52,6 +62,8 @@ class TaskStep:
     output_result: Optional[str] = None
     created_at: datetime = field(default_factory=datetime.now)
     completed_at: Optional[datetime] = None
+    retry_count: int = 0
+
 
 @dataclass
 class TaskPlan:
@@ -63,6 +75,9 @@ class TaskPlan:
     context: Dict = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
+    priority: int = 5
+    deadline: Optional[datetime] = None
+
 
 class IntentType(str, Enum):
     QUESTION = "question"
@@ -74,6 +89,7 @@ class IntentType(str, Enum):
     CONFIRMATION = "confirmation"
     CORRECTION = "correction"
 
+
 class RequestType(str, Enum):
     INFORMATION = "information"
     RECOMMENDATION = "recommendation"
@@ -83,56 +99,146 @@ class RequestType(str, Enum):
     SCHEDULE = "schedule"
     GENERAL_CHAT = "general_chat"
 
+
+@dataclass
+class ProcessingMetrics:
+    total_requests: int = 0
+    successful_requests: int = 0
+    failed_requests: int = 0
+    avg_response_time: float = 0.0
+    cache_hits: int = 0
+    cache_misses: int = 0
+    tool_executions: int = 0
+    memory_retrievals: int = 0
+    
+    def record_request(self, success: bool, duration: float):
+        self.total_requests += 1
+        if success:
+            self.successful_requests += 1
+        else:
+            self.failed_requests += 1
+        self.avg_response_time = (
+            (self.avg_response_time * (self.total_requests - 1) + duration) / self.total_requests
+        )
+
+
+class RateLimiter:
+    def __init__(self, max_requests: int, window_seconds: int):
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self.requests: deque = deque()
+    
+    async def acquire(self) -> bool:
+        now = time.time()
+        while self.requests and self.requests[0] < now - self.window_seconds:
+            self.requests.popleft()
+        
+        if len(self.requests) < self.max_requests:
+            self.requests.append(now)
+            return True
+        return False
+    
+    def get_wait_time(self) -> float:
+        if not self.requests or len(self.requests) < self.max_requests:
+            return 0.0
+        oldest = self.requests[0]
+        return max(0.0, self.window_seconds - (time.time() - oldest))
+
+
+def async_retry(max_retries: int = 3, delay: float = 1.0, backoff: float = 2.0):
+    def decorator(func: Callable):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            last_exception = None
+            current_delay = delay
+            for attempt in range(max_retries + 1):
+                try:
+                    return await func(*args, **kwargs)
+                except Exception as e:
+                    last_exception = e
+                    if attempt < max_retries:
+                        await asyncio.sleep(current_delay)
+                        current_delay *= backoff
+            raise last_exception
+        return wrapper
+    return decorator
+
+
 class PrefrontalCortex:
-    """
-    Main processing module for Vira.
-    
-    Handles message processing, response generation, and coordination
-    between memory, emotion, and context modules.
-    
-    Now uses OpenRouter API for all LLM operations.
-    """
-    
     MAX_OUTPUT_TOKENS: int = 2048
     TEMPERATURE: float = 0.7
     TOP_P: float = 0.95
     INTENT_CACHE_TTL: int = 300
+    RESPONSE_CACHE_TTL: int = 60
+    MAX_CACHE_SIZE: int = 100
+    RATE_LIMIT_REQUESTS: int = 30
+    RATE_LIMIT_WINDOW: int = 60
 
-    def __init__(
-        self,
-        hippocampus: Hippocampus,
-        amygdala: Amygdala,
-        thalamus: Thalamus,
-        parietal_lobe: Optional[ParietalLobe] = None
-    ):
-        self._hippocampus = hippocampus
-        self._amygdala = amygdala
-        self._thalamus = thalamus
-        self._parietal_lobe = parietal_lobe
-        self._openrouter: OpenRouterClient = get_openrouter_client()
+    def __init__(self):
+        self._brain = None
+        self._openrouter: Optional[OpenRouterClient] = None
         self._active_plan: Optional[TaskPlan] = None
         self._intent_cache: Dict[str, Tuple[Dict, datetime]] = {}
+        self._response_cache: Dict[str, Tuple[str, datetime]] = {}
         self._processing = False
         self._current_persona: Optional[Dict] = None
+        self._metrics = ProcessingMetrics()
+        self._rate_limiter = RateLimiter(self.RATE_LIMIT_REQUESTS, self.RATE_LIMIT_WINDOW)
+        self._plan_history: List[TaskPlan] = []
+        
+    def bind_brain(self, brain) -> None:
+        self._brain = brain
 
-        amygdala.set_hippocampus(hippocampus)
+    @property
+    def hippocampus(self):
+        return self._brain.hippocampus if self._brain else None
+
+    @property
+    def amygdala(self):
+        return self._brain.amygdala if self._brain else None
+
+    @property
+    def thalamus(self):
+        return self._brain.thalamus if self._brain else None
+
+    @property
+    def parietal_lobe(self):
+        return self._brain.parietal_lobe if self._brain else None
 
     async def initialize(self) -> None:
-        """Initialize the prefrontal cortex."""
+        self._openrouter = self._brain.openrouter
         await self._load_active_persona()
         await self._load_active_plan()
+        await self._cleanup_old_cache()
 
     async def _load_active_persona(self) -> None:
-        """Load the currently active persona from MongoDB."""
-        self._current_persona = await self._hippocampus.get_active_persona()
+        self._current_persona = await self.hippocampus.get_active_persona()
         if self._current_persona:
-            print(f"  ✓ Active Persona: {self._current_persona.get('name', 'Unknown')}")
+            print(f"  * Active Persona: {self._current_persona.get('name', 'Unknown')}")
         else:
-            print("  ⚠ No active persona found, using default")
+            print("  ! No active persona found, using default")
 
     async def _load_active_plan(self) -> None:
-        """Load any active plan from storage."""
         pass
+
+    async def _cleanup_old_cache(self) -> None:
+        now = datetime.now()
+        self._intent_cache = {
+            k: v for k, v in self._intent_cache.items()
+            if (now - v[1]).total_seconds() < self.INTENT_CACHE_TTL
+        }
+        self._response_cache = {
+            k: v for k, v in self._response_cache.items()
+            if (now - v[1]).total_seconds() < self.RESPONSE_CACHE_TTL
+        }
+        
+        if len(self._intent_cache) > self.MAX_CACHE_SIZE:
+            sorted_items = sorted(self._intent_cache.items(), key=lambda x: x[1][1])
+            self._intent_cache = dict(sorted_items[-self.MAX_CACHE_SIZE:])
+        
+        if len(self._response_cache) > self.MAX_CACHE_SIZE:
+            sorted_items = sorted(self._response_cache.items(), key=lambda x: x[1][1])
+            self._response_cache = dict(sorted_items[-self.MAX_CACHE_SIZE:])
 
     def _calculate_dynamic_params(
         self,
@@ -141,58 +247,42 @@ class PrefrontalCortex:
         emotion: str,
         base_temp: float
     ) -> Dict[str, Any]:
-        """
-        Dynamically adjust LLM parameters based on context (Neuro-Modulation).
-        Simulates changing cognitive states (Focus vs Creativity).
-        """
         params = {
             "temperature": base_temp,
             "max_tokens": self.MAX_OUTPUT_TOKENS,
             "top_p": self.TOP_P
         }
 
-        # 1. Modulation based on INTENT (The Task)
-        # Low temp for precision/logic
         if request_type in [RequestType.SCHEDULE.value, RequestType.ACTION.value, RequestType.MEMORY_RECALL.value]:
             params["temperature"] = max(0.1, base_temp - 0.4)
             params["top_p"] = 0.85
-        # High temp for chat/ideas
         elif request_type in [RequestType.GENERAL_CHAT.value, RequestType.RECOMMENDATION.value]:
             params["temperature"] = min(1.0, base_temp + 0.1)
             params["top_p"] = 0.95
-        
-        # 2. Modulation based on EMOTION (The Mood)
-        # Excited/Happy = Higher entropy (creative/energetic)
+
         if emotion in ["happy", "excited"]:
             params["temperature"] = min(1.0, params["temperature"] + 0.1)
-            params["max_tokens"] = int(self.MAX_OUTPUT_TOKENS * 1.2) # Talk more
-        # Sad/Concerned = Lower entropy (reserved/careful)
+            params["max_tokens"] = int(self.MAX_OUTPUT_TOKENS * 1.2)
         elif emotion in ["sad", "concerned", "anxious"]:
             params["temperature"] = max(0.3, params["temperature"] - 0.2)
-            params["max_tokens"] = int(self.MAX_OUTPUT_TOKENS * 0.6) # Talk less
-        # Angry/Serious = Strict focus
+            params["max_tokens"] = int(self.MAX_OUTPUT_TOKENS * 0.6)
         elif emotion in ["angry"]:
             params["temperature"] = 0.2
-            params["max_tokens"] = 512 # Concise
+            params["max_tokens"] = 512
 
-        # 3. Modulation based on INPUT TYPE
         if intent_type == IntentType.QUESTION.value:
-            # Questions need slightly more focus than statements
             params["temperature"] = max(0.3, params["temperature"] - 0.1)
 
-        # Safety clamps
         params["temperature"] = round(max(0.0, min(1.0, params["temperature"])), 2)
         
         return params
 
     def _get_persona_instruction(self) -> str:
-        """Get the current persona instruction."""
         if self._current_persona and self._current_persona.get("instruction"):
             return self._current_persona["instruction"]
         return DEFAULT_PERSONA_INSTRUCTION
     
     def _get_persona_temperature(self) -> float:
-        """Get the current persona temperature setting."""
         if self._current_persona and self._current_persona.get("temperature"):
             return self._current_persona["temperature"]
         return self.TEMPERATURE
@@ -203,24 +293,27 @@ class PrefrontalCortex:
         image_path: Optional[str] = None,
         user_name: Optional[str] = None
     ) -> str:
-        """
-        Process a user message and generate a response.
-        
-        Args:
-            message: User's text message
-            image_path: Optional path to an image file
-            user_name: Optional user's display name
-        
-        Returns:
-            AI response string
-        """
         if self._processing:
             return "⏳ Sedang memproses pesan sebelumnya..."
 
+        if not await self._rate_limiter.acquire():
+            wait_time = self._rate_limiter.get_wait_time()
+            return f"⏳ Rate limit tercapai. Tunggu {int(wait_time)} detik."
+
+        start_time = time.time()
         self._processing = True
+        success = False
+        
         try:
+            cache_key = self._get_cache_key(message, image_path)
+            cached_response = self._get_cached_response(cache_key)
+            if cached_response:
+                self._metrics.cache_hits += 1
+                return cached_response
+            self._metrics.cache_misses += 1
+
             if user_name:
-                await self._hippocampus.update_admin_profile(telegram_name=user_name)
+                await self.hippocampus.update_admin_profile(telegram_name=user_name)
 
             user_embedding = await self._generate_embedding(message)
 
@@ -229,33 +322,32 @@ class PrefrontalCortex:
             await NeuralEventBus.emit("prefrontal_cortex", "prefrontal_cortex", "intent_extracted", payload=intent_data)
             
             await NeuralEventBus.emit("prefrontal_cortex", "amygdala", "emotion_check")
-            detected_emotion = self._amygdala.detect_emotion_from_text(message)
-            await NeuralEventBus.emit("amygdala", "prefrontal_cortex", "emotion_detected", payload={
-                "emotion": detected_emotion
-            })
-            self._amygdala.adjust_for_emotion(detected_emotion)
+            if self.amygdala:
+                detected_emotion, intensity = await self.amygdala.detect_emotion_from_text(message)
+                await NeuralEventBus.emit("amygdala", "prefrontal_cortex", "emotion_detected", payload={
+                    "emotion": detected_emotion,
+                    "intensity": intensity
+                })
+                self.amygdala.adjust_for_emotion(detected_emotion, intensity)
 
-            # --- REFLEX LAYER ---
             reflex_context = ""
-            if self._parietal_lobe:
+            if self.parietal_lobe:
                 reflex_check = await self._detect_reflex_need(message)
                 if reflex_check:
                     tool_name, tool_args = reflex_check
                     await NeuralEventBus.set_activity("prefrontal_cortex", f"Using Tool: {tool_name}")
-                    tool_result = await self._parietal_lobe.execute(tool_name, tool_args)
-                    reflex_context = f"[TOOL RESULT ({tool_name})]\n{tool_result}\n\n"
-                    await NeuralEventBus.emit("prefrontal_cortex", "parietal_lobe", "tool_executed", payload={
-                        "tool": tool_name,
-                        "args": tool_args,
-                        "result": tool_result[:100]
-                    })
-            # --------------------
+                    
+                    tool_result = await self._execute_tool_with_retry(tool_name, tool_args)
+                    if tool_result:
+                        reflex_context = f"[TOOL RESULT ({tool_name})]\n{tool_result}\n\n"
+                        self._metrics.tool_executions += 1
 
             await NeuralEventBus.set_activity("prefrontal_cortex", "Retrieving Memories")
             await NeuralEventBus.emit("prefrontal_cortex", "hippocampus", "memory_retrieval", payload={
                 "query": intent_data.get("search_query", message)[:50]
             })
             memories = await self._retrieve_memories(message, intent_data)
+            self._metrics.memory_retrievals += 1
             await NeuralEventBus.emit("hippocampus", "prefrontal_cortex", "memories_found", payload={
                 "count": len(memories),
                 "types": [m.memory_type for m in memories]
@@ -266,24 +358,25 @@ class PrefrontalCortex:
                 plan_response = await self._handle_active_plan(message, intent_data)
                 if plan_response:
                     await NeuralEventBus.clear_activity("prefrontal_cortex")
+                    success = True
                     return plan_response
 
             if self._should_create_plan(message, intent_data):
                 await NeuralEventBus.set_activity("prefrontal_cortex", "Creating New Plan")
                 plan = await self.create_plan(message)
                 if plan:
-                    self._amygdala.update_satisfaction(PlanProgressState.ON_TRACK)
+                    self.amygdala.update_satisfaction(PlanProgressState.ON_TRACK)
 
-            schedules = await self._hippocampus.get_upcoming_schedules(hours_ahead=24)
+            schedules = await self.hippocampus.get_upcoming_schedules(hours_ahead=24)
             schedule_context = self._format_schedules(schedules) if schedules else None
 
             await NeuralEventBus.set_activity("prefrontal_cortex", "Building Context")
             await NeuralEventBus.emit("prefrontal_cortex", "thalamus", "context_building")
             
-            relevant_history = await self._thalamus.get_relevant_history_async(user_embedding, top_k=5)
+            relevant_history = await self.thalamus.get_relevant_history_async(user_embedding, top_k=5)
             relevant_history_context = self._format_relevant_history(relevant_history)
 
-            context = await self._thalamus.build_context(
+            context = await self.thalamus.build_context(
                 relevant_memories=[asdict(m) for m in memories] if memories else [],
                 schedule_context=schedule_context,
                 intent_data=intent_data,
@@ -299,8 +392,10 @@ class PrefrontalCortex:
             await NeuralEventBus.set_activity("prefrontal_cortex", "Generating Response")
             response = await self._generate_response(message, context, image_path, intent_info=intent_data)
 
+            self._cache_response(cache_key, response)
+
             response_embedding = await self._generate_embedding(response)
-            await self._thalamus.update_session(
+            await self.thalamus.update_session(
                 message, response, image_path,
                 user_embedding=user_embedding,
                 ai_embedding=response_embedding
@@ -314,6 +409,7 @@ class PrefrontalCortex:
             })
             await NeuralEventBus.clear_activity("prefrontal_cortex")
 
+            success = True
             return response
 
         except AllAPIExhaustedError:
@@ -323,10 +419,32 @@ class PrefrontalCortex:
             traceback.print_exc()
             return f"ERROR: {str(e)}"
         finally:
+            duration = time.time() - start_time
+            self._metrics.record_request(success, duration)
             self._processing = False
 
+    def _get_cache_key(self, message: str, image_path: Optional[str]) -> str:
+        key_data = f"{message}:{image_path or ''}"
+        return hashlib.md5(key_data.encode()).hexdigest()
+
+    def _get_cached_response(self, cache_key: str) -> Optional[str]:
+        if cache_key in self._response_cache:
+            response, timestamp = self._response_cache[cache_key]
+            if (datetime.now() - timestamp).total_seconds() < self.RESPONSE_CACHE_TTL:
+                return response
+        return None
+
+    def _cache_response(self, cache_key: str, response: str) -> None:
+        self._response_cache[cache_key] = (response, datetime.now())
+
+    @async_retry(max_retries=2, delay=0.5)
+    async def _execute_tool_with_retry(self, tool_name: str, tool_args: Dict) -> Optional[str]:
+        tool_result = await self.parietal_lobe.execute(tool_name, tool_args)
+        if tool_result and "error" not in tool_result.lower()[:50]:
+            return tool_result
+        raise Exception(f"Tool execution failed: {tool_result}")
+
     def _format_relevant_history(self, messages: List) -> str:
-        """Format relevant history messages for context."""
         if not messages:
             return ""
         lines = []
@@ -338,7 +456,6 @@ class PrefrontalCortex:
         return "\n".join(lines)
 
     async def _extract_intent(self, text: str) -> Dict:
-        """Extract intent and metadata from user text."""
         cache_key = hashlib.md5(text.encode()).hexdigest()[:16]
         if cache_key in self._intent_cache:
             cached, timestamp = self._intent_cache[cache_key]
@@ -350,7 +467,9 @@ class PrefrontalCortex:
             response = await self._openrouter.quick_completion(
                 prompt=prompt,
                 max_tokens=256,
-                temperature=0.1
+                temperature=0.1,
+                tier="analysis_model",
+                json_mode=True
             )
             result = self._extract_json(response) or self._fallback_intent(text)
             self._intent_cache[cache_key] = (result, datetime.now())
@@ -359,20 +478,20 @@ class PrefrontalCortex:
             return self._fallback_intent(text)
 
     async def _detect_reflex_need(self, text: str) -> Optional[Tuple[str, Dict]]:
-        """
-        Check if the user input requires a reflex tool execution.
-        Returns: (tool_name, tool_args) or None
-        """
-        if not self._parietal_lobe:
+        if not self.parietal_lobe:
             return None
             
-        # Fast heuristic checks to avoid LLM overhead for obvious non-tools
         text_lower = text.lower()
-        triggers = ["jam", "waktu", "pukul", "time", "date", "tanggal", "hitung", "calc", "cuaca", "weather"]
+        triggers = [
+            "jam", "waktu", "pukul", "time", "date", "tanggal", "hitung", "calc", "cuaca", "weather",
+            "ingat", "remember", "simpan", "save", "catat", "note", "memo",
+            "jadwal", "schedule", "reminder", "ingatkan", "remind", "alarm",
+            "lupa", "forget", "hapus", "delete", "update", "ubah"
+        ]
         if not any(t in text_lower for t in triggers):
             return None
 
-        tools_desc = self._parietal_lobe.get_tool_descriptions()
+        tools_desc = self.parietal_lobe.get_tool_descriptions()
         if not tools_desc:
             return None
 
@@ -392,7 +511,9 @@ If no tool is needed (just chat), return {{ "tool": null }}
             response = await self._openrouter.quick_completion(
                 prompt=prompt,
                 max_tokens=128,
-                temperature=0.0
+                temperature=0.0,
+                tier="utility_model",
+                json_mode=True
             )
             data = self._extract_json(response)
             if data and data.get("tool"):
@@ -403,7 +524,6 @@ If no tool is needed (just chat), return {{ "tool": null }}
         return None
 
     def _fallback_intent(self, text: str) -> Dict:
-        """Fallback intent extraction without LLM."""
         text_lower = text.lower()
 
         intent_type = IntentType.STATEMENT.value
@@ -445,17 +565,16 @@ If no tool is needed (just chat), return {{ "tool": null }}
         query: str,
         intent_data: Dict
     ) -> List[Memory]:
-        """Retrieve relevant memories based on query and intent."""
         if not intent_data.get("needs_memory", True):
             if intent_data.get("intent_type") == IntentType.GREETING.value:
                 return []
 
         search_query = intent_data.get("search_query", query)
-        memories = await self._hippocampus.recall(search_query, limit=3)
+        memories = await self.hippocampus.recall(search_query, limit=3)
 
         entities = intent_data.get("entities", [])
         for entity in entities[:2]:
-            entity_data = await self._hippocampus.query_entity(entity)
+            entity_data = await self.hippocampus.query_entity(entity)
             if entity_data.get("memories"):
                 for m in entity_data["memories"][:2]:
                     if not any(existing.id == m["id"] for existing in memories):
@@ -469,7 +588,6 @@ If no tool is needed (just chat), return {{ "tool": null }}
         return memories[:5]
 
     async def _generate_embedding(self, text: str) -> Optional[List[float]]:
-        """Generate embedding via Ollama (local) or return None."""
         if not text or len(text) < 5:
             return None
 
@@ -488,7 +606,6 @@ If no tool is needed (just chat), return {{ "tool": null }}
         return None
 
     async def generate_embedding(self, text: str) -> Optional[List[float]]:
-        """Public alias for _generate_embedding."""
         return await self._generate_embedding(text)
 
     async def _generate_response(
@@ -498,36 +615,20 @@ If no tool is needed (just chat), return {{ "tool": null }}
         image_path: Optional[str] = None,
         intent_info: Optional[Dict] = None
     ) -> str:
-        """
-        Generate response using OpenRouter API.
-        
-        Args:
-            user_text: User's message
-            context: Built context string
-            image_path: Optional image path (vision support)
-            intent_info: Information about user intent for parameter shaping
-        
-        Returns:
-            Generated response string
-        """
         persona_instruction = self._get_persona_instruction()
-        persona_modifier = self._amygdala.get_response_modifier()
+        persona_modifier = self.amygdala.get_response_modifier()
         full_instruction = persona_instruction + persona_modifier
         
-        # --- DYNAMIC COGNITIVE PARAMETERS ---
         base_temp = self._get_persona_temperature()
         
-        # Defaults if intent info is missing
         i_type = intent_info.get("intent_type", "statement") if intent_info else "statement"
         r_type = intent_info.get("request_type", "general_chat") if intent_info else "general_chat"
-        current_mood = self._amygdala.mood.value
+        current_mood = self.amygdala.mood.value
         
         cognitive_params = self._calculate_dynamic_params(i_type, r_type, current_mood, base_temp)
         
-        # Log parameter change for debugging (or "thought" awareness)
         if cognitive_params["temperature"] != base_temp:
-            print(f"  🧠 Neuro-Modulation: Temp {base_temp} -> {cognitive_params['temperature']} | Mood: {current_mood}")
-        # ------------------------------------
+            print(f"  * Neuro-Modulation: Temp {base_temp} -> {cognitive_params['temperature']} | Mood: {current_mood}")
         
         user_content = user_text
         if context:
@@ -536,8 +637,8 @@ If no tool is needed (just chat), return {{ "tool": null }}
         if image_path and os.path.exists(image_path):
             user_content += "\n\n[Note: User sent an image]"
         
-        history = await self._thalamus.get_history_for_model_async()
-        messages = []
+        history = await self.thalamus.get_history_for_model_async()
+        messages = [{"role": "system", "content": full_instruction}]
         
         for msg in history[-20:]:
             role = "user" if msg.role == "user" else "assistant"
@@ -552,15 +653,17 @@ If no tool is needed (just chat), return {{ "tool": null }}
         
         response = await self._openrouter.chat_completion(
             messages=messages,
-            system=full_instruction,
             temperature=cognitive_params["temperature"],
             max_tokens=cognitive_params["max_tokens"],
             top_p=cognitive_params["top_p"],
-            preferred_tier="tier_1"
+            tier="chat_model"
         )
         
-        prefix = self._amygdala.get_response_prefix()
-        text = response.content.strip()
+        prefix = self.amygdala.get_response_prefix()
+        if response and "choices" in response and response["choices"]:
+            text = response["choices"][0]["message"]["content"].strip()
+        else:
+            text = "Maaf, ada kendala dalam memproses permintaan."
         if prefix:
             text = f"{prefix} {text}"
         
@@ -572,66 +675,9 @@ If no tool is needed (just chat), return {{ "tool": null }}
         ai_response: str,
         intent_data: Dict
     ) -> None:
-        """Post-process interaction for memory and schedule extraction."""
-        try:
-            analysis = await self._analyze_interaction(user_text, ai_response)
-            if analysis:
-                await self._process_analysis(analysis)
-        except Exception:
-            pass
-
-    async def _analyze_interaction(
-        self,
-        user_text: str,
-        ai_response: str
-    ) -> Optional[Dict]:
-        """Analyze interaction for memory/schedule extraction."""
-        try:
-            now = datetime.now().isoformat()
-            prompt = f"""{CHAT_INTERACTION_ANALYSIS_INSTRUCTION}
-
-[CURRENT SYSTEM TIME]: {now}
-[USER INPUT]: {user_text}
-[AI RESPONSE]: {ai_response}"""
-
-            response = await self._openrouter.quick_completion(
-                prompt=prompt,
-                max_tokens=512,
-                temperature=0.2
-            )
-            return self._extract_json(response)
-        except Exception:
-            return None
-
-    async def _process_analysis(self, analysis: Dict) -> None:
-        """Process analysis results for memory and schedule storage."""
-        memory_data = analysis.get("memory", {})
-        if memory_data.get("should_store"):
-            summary = memory_data.get("summary", "")
-            mem_type = memory_data.get("type", "general")
-            priority = memory_data.get("priority", 0.5)
-
-            if memory_data.get("action") == "add":
-                await self._hippocampus.store(summary, mem_type, priority)
-            elif memory_data.get("action") == "forget":
-                pass
-
-        schedules = analysis.get("schedules", [])
-        for sched in schedules:
-            if sched.get("should_schedule"):
-                time_str = sched.get("time_str")
-                context = sched.get("context", "")
-                intent = sched.get("intent", "add")
-
-                if intent == "add" and time_str:
-                    try:
-                        trigger_time = date_parser.parse(time_str)
-                        await self._hippocampus.add_schedule(trigger_time, context)
-                    except Exception:
-                        pass
+        pass
 
     def _should_create_plan(self, text: str, intent_data: Dict) -> bool:
-        """Check if a task plan should be created."""
         if self._active_plan:
             return False
 
@@ -648,8 +694,7 @@ If no tool is needed (just chat), return {{ "tool": null }}
 
         return False
 
-    async def create_plan(self, goal: str) -> Optional[TaskPlan]:
-        """Create a task plan for a complex goal."""
+    async def create_plan(self, goal: str, priority: int = 5, deadline: Optional[datetime] = None) -> Optional[TaskPlan]:
         try:
             prompt = f"""Decompose this goal into 3-5 actionable steps:
 
@@ -674,16 +719,18 @@ Output format (JSON):
                 return None
 
             plan = TaskPlan(
-                id=1,
+                id=len(self._plan_history) + 1,
                 goal=data.get("goal_summary", goal),
                 original_request=goal,
-                status=PlanStatus.IN_PROGRESS
+                status=PlanStatus.IN_PROGRESS,
+                priority=priority,
+                deadline=deadline
             )
 
             for step_data in data.get("steps", []):
                 step = TaskStep(
                     id=step_data.get("order"),
-                    plan_id=1,
+                    plan_id=plan.id,
                     order_index=step_data.get("order", 0),
                     description=step_data.get("description", ""),
                     action_type=step_data.get("action_type", "action")
@@ -701,7 +748,6 @@ Output format (JSON):
         user_input: str,
         intent_data: Dict
     ) -> Optional[str]:
-        """Handle user input in context of active plan."""
         if not self._active_plan:
             return None
 
@@ -709,32 +755,50 @@ Output format (JSON):
 
         if any(w in text_lower for w in ["batal", "cancel", "stop", "hentikan"]):
             self._active_plan.status = PlanStatus.CANCELLED
-            self._amygdala.update_satisfaction(PlanProgressState.ABANDONED)
+            self.amygdala.update_satisfaction(PlanProgressState.ABANDONED)
+            self._plan_history.append(self._active_plan)
             old_plan = self._active_plan
             self._active_plan = None
             return f"Oke, rencana '{old_plan.goal}' dibatalkan."
+
+        if any(w in text_lower for w in ["pause", "jeda", "tunda"]):
+            self._active_plan.status = PlanStatus.PAUSED
+            return f"Rencana '{self._active_plan.goal}' dijeda sementara."
+
+        if any(w in text_lower for w in ["lanjut", "continue", "resume"]):
+            if self._active_plan.status == PlanStatus.PAUSED:
+                self._active_plan.status = PlanStatus.IN_PROGRESS
+                return f"Rencana '{self._active_plan.goal}' dilanjutkan."
 
         if any(w in text_lower for w in ["selesai", "done", "sudah", "completed"]):
             current_step = self._get_current_step()
             if current_step:
                 current_step.status = StepStatus.COMPLETED
                 current_step.completed_at = datetime.now()
-                self._amygdala.update_satisfaction(PlanProgressState.ON_TRACK)
+                self.amygdala.update_satisfaction(PlanProgressState.ON_TRACK)
 
                 next_step = self._get_current_step()
                 if next_step:
                     return f"Mantap! Langkah selanjutnya: {next_step.description}"
                 else:
                     self._active_plan.status = PlanStatus.COMPLETED
-                    self._amygdala.update_satisfaction(PlanProgressState.COMPLETED)
+                    self.amygdala.update_satisfaction(PlanProgressState.COMPLETED)
+                    self._plan_history.append(self._active_plan)
                     goal = self._active_plan.goal
                     self._active_plan = None
                     return f"Selamat! Rencana '{goal}' selesai semua. Bangga sama lu!"
 
+        if any(w in text_lower for w in ["skip", "lewati"]):
+            current_step = self._get_current_step()
+            if current_step:
+                current_step.status = StepStatus.SKIPPED
+                next_step = self._get_current_step()
+                if next_step:
+                    return f"Langkah dilewati. Selanjutnya: {next_step.description}"
+
         return None
 
     def _get_current_step(self) -> Optional[TaskStep]:
-        """Get the current active step in the plan."""
         if not self._active_plan:
             return None
 
@@ -744,30 +808,45 @@ Output format (JSON):
         return None
 
     def get_active_plan(self) -> Optional[TaskPlan]:
-        """Get the currently active plan."""
         return self._active_plan
 
+    def get_plan_history(self) -> List[TaskPlan]:
+        return self._plan_history
+
+    def get_plan_progress(self) -> Optional[Dict[str, Any]]:
+        if not self._active_plan:
+            return None
+        
+        total_steps = len(self._active_plan.steps)
+        completed_steps = sum(1 for s in self._active_plan.steps if s.status == StepStatus.COMPLETED)
+        
+        return {
+            "goal": self._active_plan.goal,
+            "progress": f"{completed_steps}/{total_steps}",
+            "percentage": int((completed_steps / total_steps) * 100) if total_steps > 0 else 0,
+            "current_step": self._get_current_step().description if self._get_current_step() else None,
+            "status": self._active_plan.status.value
+        }
+
     async def check_pending_schedules(self, bot) -> None:
-        """Check and send pending schedule reminders."""
-        pending = await self._hippocampus.get_pending_schedules(limit=5)
+        pending = await self.hippocampus.get_pending_schedules(limit=5)
 
         for schedule in pending:
             schedule_id = schedule.get("id")
             context = schedule.get("context", "")
 
-            from src.brainstem import ADMIN_ID
+            from src.brain.brainstem import ADMIN_ID
             if ADMIN_ID:
                 try:
                     await bot.send_message(
                         chat_id=int(ADMIN_ID),
                         text=f"⏰ *Pengingat*: {context}"
                     )
-                    await self._hippocampus.mark_schedule_executed(schedule_id, "delivered")
+                    await self.hippocampus.mark_schedule_executed(schedule_id, "delivered")
                 except Exception:
                     pass
 
     def _format_schedules(self, schedules: List[Dict]) -> str:
-        """Format schedules for context display."""
         if not schedules:
             return ""
 
@@ -848,8 +927,7 @@ Output format (JSON):
         return None
 
     async def switch_persona(self, persona_id: str) -> bool:
-        """Switch to a different persona."""
-        success = await self._hippocampus.set_active_persona(persona_id)
+        success = await self.hippocampus.set_active_persona(persona_id)
         if success:
             await self._load_active_persona()
             await NeuralEventBus.emit(
@@ -862,7 +940,6 @@ Output format (JSON):
         return success
 
     def get_system_stats(self) -> Dict[str, Any]:
-        """Get system statistics."""
         api_status = self._openrouter.get_status()
         return {
             "api_health": "OK" if api_status.get("api_configured") else "No API Key",
@@ -871,5 +948,60 @@ Output format (JSON):
             "active_processing": 1 if self._processing else 0,
             "total_users_tracked": 1,
             "current_persona": self._current_persona.get("name") if self._current_persona else "Default",
-            "model_health": api_status.get("model_health", {})
+            "model_health": api_status.get("model_health", {}),
+            "metrics": {
+                "total_requests": self._metrics.total_requests,
+                "success_rate": f"{(self._metrics.successful_requests / max(self._metrics.total_requests, 1)) * 100:.1f}%",
+                "avg_response_time": f"{self._metrics.avg_response_time:.2f}s",
+                "cache_hit_rate": f"{(self._metrics.cache_hits / max(self._metrics.cache_hits + self._metrics.cache_misses, 1)) * 100:.1f}%",
+                "tool_executions": self._metrics.tool_executions,
+                "memory_retrievals": self._metrics.memory_retrievals
+            }
         }
+
+    def get_metrics(self) -> ProcessingMetrics:
+        return self._metrics
+
+    def reset_metrics(self) -> None:
+        self._metrics = ProcessingMetrics()
+
+    async def clear_cache(self) -> Dict[str, int]:
+        intent_cache_size = len(self._intent_cache)
+        response_cache_size = len(self._response_cache)
+        
+        self._intent_cache.clear()
+        self._response_cache.clear()
+        
+        return {
+            "intent_cache_cleared": intent_cache_size,
+            "response_cache_cleared": response_cache_size
+        }
+
+    async def check_pending_schedules(self, bot) -> None:
+        if not self.hippocampus:
+            return
+        
+        try:
+            from src.brain.brainstem import SYSTEM_CONFIG
+            
+            pending = await self.hippocampus.get_pending_schedules(limit=10)
+            
+            for schedule in pending:
+                schedule_id = schedule.get("id")
+                context = schedule.get("context", "Pengingat")
+                
+                try:
+                    message = f"⏰ Pengingat: {context}"
+                    await bot.send_message(
+                        chat_id=int(SYSTEM_CONFIG.admin_id),
+                        text=message
+                    )
+                    
+                    await self.hippocampus._mongo.schedules.update_one(
+                        {"_id": schedule_id},
+                        {"$set": {"status": "executed", "executed_at": datetime.now()}}
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            pass

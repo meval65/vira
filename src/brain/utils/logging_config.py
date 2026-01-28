@@ -1,7 +1,7 @@
 import logging
 import sys
 
-def setup_logging(level=logging.INFO, format_style: str = "standard"):
+def setup_logging(level=logging.ERROR, format_style: str = "standard"):
     if format_style == "minimal":
         fmt = "%(levelname)s: %(message)s"
     elif format_style == "detailed":

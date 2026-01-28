@@ -1,8 +1,3 @@
-"""
-Utility functions for Vira Telegram Bot.
-Contains rate limiting, file handling, and message utilities.
-"""
-
 import os
 import asyncio
 import logging

@@ -5,7 +5,7 @@ from typing import Optional, Dict, Any
 
 from telegram.ext import ContextTypes
 
-from src.brainstem import NeuralEventBus
+from src.brain.brainstem import NeuralEventBus
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +14,6 @@ def get_brain_from_context(context: ContextTypes.DEFAULT_TYPE):
     return context.bot_data.get('brain')
 
 async def background_maintenance(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Periodic maintenance tasks - runs daily."""
     brain = get_brain_from_context(context)
     if not brain:
         logger.warning("Brain not initialized, skipping maintenance")
@@ -141,7 +140,7 @@ async def background_schedule_checker(context: ContextTypes.DEFAULT_TYPE) -> Non
             schedule_id = schedule.get("id")
             schedule_context = schedule.get("context", "")
 
-            from src.brainstem import ADMIN_ID
+            from src.brain.brainstem import ADMIN_ID
             if ADMIN_ID:
                 try:
                     await NeuralEventBus.set_activity("cerebellum", f"Sending Reminder")
@@ -219,7 +218,7 @@ async def background_proactive_check(context: ContextTypes.DEFAULT_TYPE) -> None
         message = await brain.thalamus.check_proactive_triggers()
         
         if message:
-            from src.brainstem import ADMIN_ID
+            from src.brain.brainstem import ADMIN_ID
             from telegram.constants import ParseMode
             
             if ADMIN_ID:

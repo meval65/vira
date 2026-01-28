@@ -6,7 +6,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode, ChatAction
 from telegram.ext import ContextTypes
 
-from src.brainstem import ADMIN_ID, NeuralEventBus
+from src.brain.brainstem import ADMIN_ID, NeuralEventBus
 
 
 def get_brain_from_context(context: ContextTypes.DEFAULT_TYPE):
