@@ -26,7 +26,9 @@ from src.brain.brainstem import (
 )
 from src.brain.constants import (
     DEFAULT_PERSONA_INSTRUCTION,
-    EXTRACTION_INSTRUCTION
+    EXTRACTION_INSTRUCTION,
+    UNIFIED_ANALYSIS_INSTRUCTION,
+    FILLER_WORDS
 )
 from src.brain.hippocampus import Hippocampus, Memory
 from src.brain.amygdala import Amygdala, PlanProgressState
@@ -215,6 +217,15 @@ class PrefrontalCortex:
         self._current_persona = await self.hippocampus.get_active_persona()
         if self._current_persona:
             print(f"  * Active Persona: {self._current_persona.get('name', 'Unknown')}")
+            
+            calibration = self._current_persona.get("calibration", {})
+            if not calibration.get("calibration_status", False):
+                print(f"  ! Persona '{self._current_persona.get('name')}' not calibrated, running calibration...")
+                await self._run_persona_calibration(self._current_persona)
+                self._current_persona = await self.hippocampus.get_active_persona()
+            
+            if self.amygdala:
+                await self.amygdala.sync_with_persona(self._current_persona)
         else:
             print("  ! No active persona found, using default")
 
@@ -315,28 +326,41 @@ class PrefrontalCortex:
             if user_name:
                 await self.hippocampus.update_admin_profile(telegram_name=user_name)
 
-            user_embedding = await self._generate_embedding(message)
+            should_embed = self._should_embed_text(message)
+            user_embedding = await self._generate_embedding(message) if should_embed else None
 
-            await NeuralEventBus.set_activity("prefrontal_cortex", "Analyzing Intent")
-            intent_data = await self._extract_intent(message)
-            await NeuralEventBus.emit("prefrontal_cortex", "prefrontal_cortex", "intent_extracted", payload=intent_data)
+            await NeuralEventBus.set_activity("prefrontal_cortex", "Unified Analysis")
+            analysis_result = await self._unified_analysis(message)
             
-            await NeuralEventBus.emit("prefrontal_cortex", "amygdala", "emotion_check")
+            intent_data = {
+                "intent_type": analysis_result.get("intent_type", "statement"),
+                "request_type": analysis_result.get("request_type", "general_chat"),
+                "entities": analysis_result.get("entities", []),
+                "search_query": analysis_result.get("search_query", message[:100]),
+                "sentiment": analysis_result.get("sentiment", "neutral"),
+                "needs_memory": analysis_result.get("needs_memory", True),
+                "confidence": analysis_result.get("confidence", 0.6)
+            }
+            
+            detected_emotion = analysis_result.get("emotion", "neutral")
+            emotion_intensity = analysis_result.get("emotion_intensity", 0.5)
+            
             if self.amygdala:
-                detected_emotion, intensity = await self.amygdala.detect_emotion_from_text(message)
-                await NeuralEventBus.emit("amygdala", "prefrontal_cortex", "emotion_detected", payload={
-                    "emotion": detected_emotion,
-                    "intensity": intensity
-                })
-                self.amygdala.adjust_for_emotion(detected_emotion, intensity)
+                self.amygdala.adjust_for_emotion(detected_emotion, emotion_intensity)
+            
+            asyncio.create_task(NeuralEventBus.emit("prefrontal_cortex", "prefrontal_cortex", "analysis_complete", payload={
+                "intent": intent_data,
+                "emotion": detected_emotion,
+                "intensity": emotion_intensity
+            }))
 
             reflex_context = ""
-            if self.parietal_lobe:
-                reflex_check = await self._detect_reflex_need(message)
-                if reflex_check:
-                    tool_name, tool_args = reflex_check
+            tool_needed = analysis_result.get("tool_needed")
+            if tool_needed and self.parietal_lobe:
+                tool_name = tool_needed.get("tool")
+                tool_args = tool_needed.get("args", {})
+                if tool_name:
                     await NeuralEventBus.set_activity("prefrontal_cortex", f"Using Tool: {tool_name}")
-                    
                     tool_result = await self._execute_tool_with_retry(tool_name, tool_args)
                     if tool_result:
                         reflex_context = f"[TOOL RESULT ({tool_name})]\n{tool_result}\n\n"
@@ -388,6 +412,10 @@ class PrefrontalCortex:
 
             if reflex_context:
                 context = f"{reflex_context}{context}"
+
+            insight_context = await self._get_relevant_insights(message)
+            if insight_context:
+                context = f"{context}\n\n{insight_context}"
 
             await NeuralEventBus.set_activity("prefrontal_cortex", "Generating Response")
             response = await self._generate_response(message, context, image_path, intent_info=intent_data)
@@ -454,6 +482,99 @@ class PrefrontalCortex:
             content = msg.content[:200] + "..." if len(msg.content) > 200 else msg.content
             lines.append(f"[{time_str}] {role}: {content}")
         return "\n".join(lines)
+
+    def _should_embed_text(self, text: str) -> bool:
+        if not text:
+            return False
+        
+        words = text.strip().split()
+        if len(words) < 3:
+            return False
+        
+        meaningful_words = [w for w in words if w.lower().strip(".,!?;:") not in FILLER_WORDS]
+        return len(meaningful_words) >= 2
+
+    async def _unified_analysis(self, text: str) -> Dict:
+        cache_key = hashlib.md5(text.encode()).hexdigest()[:16]
+        if cache_key in self._intent_cache:
+            cached, timestamp = self._intent_cache[cache_key]
+            if (datetime.now() - timestamp).total_seconds() < self.INTENT_CACHE_TTL:
+                return cached
+
+        try:
+            tools_desc = ""
+            if self.parietal_lobe:
+                tools_desc = self.parietal_lobe.get_tool_descriptions() or "No tools available"
+            
+            prompt = UNIFIED_ANALYSIS_INSTRUCTION.format(tools_description=tools_desc)
+            prompt += f"\n\nUser Input: \"{text}\""
+            
+            response = await self._openrouter.quick_completion(
+                prompt=prompt,
+                max_tokens=384,
+                temperature=0.1,
+                tier="analysis_model",
+                json_mode=True
+            )
+            
+            result = self._extract_json(response)
+            if result:
+                self._intent_cache[cache_key] = (result, datetime.now())
+                return result
+            
+            return self._fallback_unified_analysis(text)
+        except Exception:
+            return self._fallback_unified_analysis(text)
+
+    def _fallback_unified_analysis(self, text: str) -> Dict:
+        text_lower = text.lower()
+        
+        intent_type = "statement"
+        if "?" in text or any(w in text_lower for w in ["apa", "siapa", "kapan", "dimana", "gimana", "kenapa", "what", "who", "when", "where", "how", "why"]):
+            intent_type = "question"
+        elif any(w in text_lower for w in ["ingatkan", "remind", "jadwal", "schedule", "tolong", "please"]):
+            intent_type = "request"
+        elif any(w in text_lower for w in ["hai", "halo", "hi", "hello", "pagi", "siang", "sore", "malam"]):
+            intent_type = "greeting"
+        
+        request_type = "general_chat"
+        if any(w in text_lower for w in ["jadwal", "ingatkan", "remind", "schedule"]):
+            request_type = "schedule"
+        elif any(w in text_lower for w in ["ingat", "tau", "remember", "know"]):
+            request_type = "memory_recall"
+        
+        sentiment = "neutral"
+        if any(w in text_lower for w in ["senang", "happy", "bagus", "mantap", "keren", "suka"]):
+            sentiment = "positive"
+        elif any(w in text_lower for w in ["sedih", "sad", "kesel", "marah", "benci"]):
+            sentiment = "negative"
+        
+        emotion = "neutral"
+        if any(w in text_lower for w in ["senang", "happy", "excited"]):
+            emotion = "happy"
+        elif any(w in text_lower for w in ["sedih", "sad"]):
+            emotion = "sad"
+        elif any(w in text_lower for w in ["kesel", "marah", "angry"]):
+            emotion = "angry"
+        
+        entities = []
+        words = text.split()
+        for w in words:
+            if w and w[0].isupper() and len(w) > 2:
+                entities.append(w.lower())
+        
+        return {
+            "intent_type": intent_type,
+            "request_type": request_type,
+            "entities": entities[:5],
+            "search_query": text[:100],
+            "emotion": emotion,
+            "emotion_intensity": 0.5,
+            "tool_needed": None,
+            "sentiment": sentiment,
+            "needs_memory": request_type == "memory_recall",
+            "confidence": 0.6
+        }
 
     async def _extract_intent(self, text: str) -> Dict:
         cache_key = hashlib.md5(text.encode()).hexdigest()[:16]
@@ -676,6 +797,33 @@ If no tool is needed (just chat), return {{ "tool": null }}
         intent_data: Dict
     ) -> None:
         pass
+
+    async def _get_relevant_insights(self, user_message: str) -> Optional[str]:
+        if not self.hippocampus:
+            return None
+        
+        try:
+            insights = await self.hippocampus.get_relevant_insights(user_message, limit=2)
+            if not insights:
+                return None
+            
+            insight_texts = []
+            for insight in insights:
+                if insight.get("insight_text"):
+                    insight_texts.append(insight["insight_text"])
+                    insight_id = insight.get("id")
+                    if insight_id:
+                        asyncio.create_task(self.hippocampus.mark_insight_used(insight_id))
+            
+            if not insight_texts:
+                return None
+            
+            formatted = "[INTERNAL INSIGHT - Gunakan secara natural jika relevan, jangan sebutkan bahwa ini dari 'insight' atau 'lamunan']\n"
+            formatted += "\n".join(f"- {text}" for text in insight_texts)
+            
+            return formatted
+        except Exception:
+            return None
 
     def _should_create_plan(self, text: str, intent_data: Dict) -> bool:
         if self._active_plan:
@@ -930,14 +1078,122 @@ Output format (JSON):
         success = await self.hippocampus.set_active_persona(persona_id)
         if success:
             await self._load_active_persona()
+            
+            if self.amygdala and self._current_persona:
+                await self.amygdala.sync_with_persona(self._current_persona)
+            
             await NeuralEventBus.emit(
                 "prefrontal_cortex", "dashboard", "persona_changed",
                 payload={
                     "persona_id": persona_id,
-                    "persona_name": self._current_persona.get("name") if self._current_persona else "Unknown"
+                    "persona_name": self._current_persona.get("name") if self._current_persona else "Unknown",
+                    "calibration_status": self._current_persona.get("calibration", {}).get("calibration_status", False) if self._current_persona else False
                 }
             )
         return success
+
+    async def _run_persona_calibration(self, persona: Dict) -> None:
+        if not persona or not self._openrouter:
+            return
+        
+        persona_id = persona.get("id")
+        description = persona.get("description", "")
+        traits = persona.get("traits", {})
+        voice_tone = persona.get("voice_tone", "friendly")
+        
+        calibration_data = await self._generate_calibration_from_instruction(
+            description, traits, voice_tone
+        )
+        
+        if calibration_data and persona_id:
+            await self.hippocampus.update_persona_calibration(
+                persona_id=persona_id,
+                emotional_inertia=calibration_data.get("emotional_inertia", 0.7),
+                base_arousal=calibration_data.get("base_arousal", 0.0),
+                base_valence=calibration_data.get("base_valence", 0.0),
+                calibration_status=True,
+                identity_anchor=calibration_data.get("identity_anchor", description)
+            )
+            print(f"  * Calibration complete for '{persona.get('name')}'")
+
+    async def _generate_calibration_from_instruction(
+        self,
+        description: str,
+        traits: Dict,
+        voice_tone: str
+    ) -> Dict:
+        try:
+            prompt = f"""Analyze this persona and generate emotional calibration parameters.
+
+Persona Description: {description}
+Traits: {traits}
+Voice Tone: {voice_tone}
+
+Generate calibration values in JSON format:
+{{
+  "emotional_inertia": 0.0-1.0 (how stable/slow emotions change, higher = more stable),
+  "base_arousal": -1.0 to 1.0 (baseline energy level, negative = calm, positive = energetic),
+  "base_valence": -1.0 to 1.0 (baseline mood, negative = serious, positive = cheerful),
+  "identity_anchor": "A concise identity statement for this persona"
+}}
+
+Consider the traits and tone to determine appropriate emotional baseline."""
+
+            response = await self._openrouter.quick_completion(
+                prompt=prompt,
+                max_tokens=256,
+                temperature=0.2,
+                tier="analysis_model",
+                json_mode=True
+            )
+            
+            result = self._extract_json(response)
+            if result:
+                return {
+                    "emotional_inertia": max(0.0, min(1.0, result.get("emotional_inertia", 0.7))),
+                    "base_arousal": max(-1.0, min(1.0, result.get("base_arousal", 0.0))),
+                    "base_valence": max(-1.0, min(1.0, result.get("base_valence", 0.0))),
+                    "identity_anchor": result.get("identity_anchor", description)
+                }
+        except Exception:
+            pass
+        
+        return self._fallback_calibration_from_traits(traits, voice_tone, description)
+
+    def _fallback_calibration_from_traits(self, traits: Dict, voice_tone: str, description: str) -> Dict:
+        emotional_inertia = 0.7
+        base_arousal = 0.0
+        base_valence = 0.0
+        
+        if "enthusiasm" in traits:
+            enthusiasm = traits["enthusiasm"]
+            base_arousal = (enthusiasm - 0.5) * 0.6
+            base_valence = (enthusiasm - 0.5) * 0.4
+        
+        if "formality" in traits:
+            formality = traits["formality"]
+            emotional_inertia = 0.5 + (formality * 0.4)
+        
+        tone_modifiers = {
+            "friendly": (0.0, 0.2),
+            "professional": (0.0, -0.1),
+            "playful": (0.3, 0.3),
+            "calm": (-0.2, 0.0),
+            "energetic": (0.4, 0.2),
+            "empathetic": (0.0, 0.1)
+        }
+        
+        if voice_tone in tone_modifiers:
+            arousal_mod, valence_mod = tone_modifiers[voice_tone]
+            base_arousal = max(-1.0, min(1.0, base_arousal + arousal_mod))
+            base_valence = max(-1.0, min(1.0, base_valence + valence_mod))
+        
+        return {
+            "emotional_inertia": emotional_inertia,
+            "base_arousal": base_arousal,
+            "base_valence": base_valence,
+            "identity_anchor": description
+        }
 
     def get_system_stats(self) -> Dict[str, Any]:
         api_status = self._openrouter.get_status()

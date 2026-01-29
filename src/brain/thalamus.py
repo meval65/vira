@@ -12,6 +12,7 @@ from collections import deque
 from typing import List, Dict, Optional, Any, Deque
 from dataclasses import dataclass, field
 from enum import Enum
+import tiktoken
 
 import PIL.Image
 from google.genai import types
@@ -79,10 +80,7 @@ class Thalamus:
     DEFAULT_LON: float = 112.2395766
     WEATHER_CACHE_TTL: int = 1800
     
-    # Context window management
-    MAX_CONTEXT_TOKENS: int = 4000  # Approximate token budget
-
-
+    MAX_CONTEXT_TOKENS: int = 1500
 
     def __init__(self):
         self._brain = None
@@ -114,9 +112,8 @@ class Thalamus:
     def estimate_tokens(self, text: str) -> int:
         if not text:
             return 0
-        words = len(text.split())
-        chars = len(text)
-        return max(words, chars // 3)
+        encoding = tiktoken.get_encoding("cl100k_base")
+        return len(encoding.encode(text))
 
     @property
     def hippocampus(self):

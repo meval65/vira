@@ -7,7 +7,7 @@ from telegram.constants import ParseMode, ChatAction
 from telegram.ext import ContextTypes
 
 from src.brain.brainstem import ADMIN_ID, NeuralEventBus
-
+from src.brain.medulla_oblongata import handle_document, handle_photo
 
 def get_brain_from_context(context: ContextTypes.DEFAULT_TYPE):
     return context.bot_data.get('brain')
@@ -194,12 +194,12 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     user_dir = os.path.join("storage", "userdata", "admin")
 
     if update.message.document:
-        text_input = await _handle_document(update, user_dir, text_input)
+        text_input = await handle_document(update, user_dir, text_input)
         if text_input is None:
             return
 
     if update.message.photo:
-        img_path = await _handle_photo(update, user_dir)
+        img_path = await handle_photo(update, user_dir)
         if img_path is None and not text_input:
             return
 

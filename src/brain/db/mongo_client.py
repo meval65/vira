@@ -156,6 +156,16 @@ class MongoDBClient:
         """Access the conversation_topics collection."""
         return self.db["conversation_topics"]
     
+    @property
+    def insights(self):
+        """Access the insights collection for daydream-generated insights."""
+        return self.db["insights"]
+    
+    @property
+    def tool_outputs(self):
+        """Access the tool_outputs collection."""
+        return self.db["tool_outputs"]
+    
     # ==================== COLLECTION SETUP ====================
     
     async def _setup_collections(self) -> None:
@@ -219,6 +229,18 @@ class MongoDBClient:
             IndexModel([("topic", ASCENDING)]),
             IndexModel([("last_mentioned", DESCENDING)]),
             IndexModel([("frequency", DESCENDING)]),
+        ])
+        
+        # --- insights (daydream-generated) ---
+        await self._create_indexes("insights", [
+            IndexModel([("created_at", DESCENDING)]),
+            IndexModel([("is_used", ASCENDING)]),
+            IndexModel([("relevance_score", DESCENDING)]),
+            IndexModel(
+                [("expires_at", ASCENDING)],
+                expireAfterSeconds=0,
+                name="ttl_insights"
+            ),
         ])
         
         print("  ✓ MongoDB indexes initialized")

@@ -7,6 +7,12 @@ from enum import Enum
 from pydantic import BaseModel, Field
 from src.brain.brainstem import MoodState, NeuralEventBus
 
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
+
 
 @dataclass
 class PADVector:
@@ -90,6 +96,72 @@ class EmotionTransition:
     intensity: float
 
 
+@dataclass
+class HardwareStatus:
+    cpu_percent: float = 0.0
+    ram_percent: float = 0.0
+    temperature: Optional[float] = None
+    is_available: bool = False
+    
+    def get_mood_description(self) -> str:
+        parts = []
+        if self.temperature and self.temperature >= 80:
+            parts.append("overheating")
+        elif self.temperature and self.temperature >= 70:
+            parts.append("warm")
+        if self.cpu_percent >= 90:
+            parts.append("overwhelmed")
+        elif self.cpu_percent >= 70:
+            parts.append("busy")
+        if self.ram_percent >= 90:
+            parts.append("mentally_exhausted")
+        elif self.ram_percent >= 80:
+            parts.append("strained")
+        return "_".join(parts) if parts else "normal"
+
+
+class HardwareMonitor:
+    _last_check: Optional[datetime] = None
+    _cached_status: Optional[HardwareStatus] = None
+    _cache_ttl_seconds: int = 30
+    
+    @classmethod
+    def get_status(cls) -> HardwareStatus:
+        now = datetime.now()
+        if (cls._cached_status and cls._last_check and 
+            (now - cls._last_check).total_seconds() < cls._cache_ttl_seconds):
+            return cls._cached_status
+        
+        if not PSUTIL_AVAILABLE:
+            return HardwareStatus(is_available=False)
+        
+        try:
+            cpu_percent = psutil.cpu_percent(interval=0.1)
+            ram_percent = psutil.virtual_memory().percent
+            
+            temperature = None
+            try:
+                temps = psutil.sensors_temperatures()
+                if temps:
+                    for name, entries in temps.items():
+                        if entries:
+                            temperature = entries[0].current
+                            break
+            except (AttributeError, NotImplementedError):
+                pass
+            
+            cls._cached_status = HardwareStatus(
+                cpu_percent=cpu_percent,
+                ram_percent=ram_percent,
+                temperature=temperature,
+                is_available=True
+            )
+            cls._last_check = now
+            return cls._cached_status
+        except Exception:
+            return HardwareStatus(is_available=False)
+
+
 class EmotionalState(BaseModel):
     pad_valence: float = Field(default=0.0, ge=-1.0, le=1.0)
     pad_arousal: float = Field(default=0.0, ge=-1.0, le=1.0)
@@ -130,6 +202,9 @@ class EmotionConfig:
     DECAY_RATE_PER_HOUR = 0.1
     INERTIA_FACTOR = 0.7
     TRUST_INFLUENCE = 0.3
+    
+    BASE_AROUSAL = 0.0
+    BASE_VALENCE = 0.0
     
     EMOTION_CACHE_TTL = 300
     EMOTION_CACHE_MAX = 50
@@ -319,10 +394,23 @@ class EmotionDetector:
 class EmotionDynamics:
     def __init__(self, config: EmotionConfig):
         self._config = config
+        self._persona_inertia: Optional[float] = None
+        self._persona_base_arousal: float = 0.0
+        self._persona_base_valence: float = 0.0
+
+    def set_persona_calibration(self, emotional_inertia: float, base_arousal: float, base_valence: float) -> None:
+        self._persona_inertia = max(0.0, min(1.0, emotional_inertia))
+        self._persona_base_arousal = max(-1.0, min(1.0, base_arousal))
+        self._persona_base_valence = max(-1.0, min(1.0, base_valence))
+
+    def get_effective_inertia(self) -> float:
+        if self._persona_inertia is not None:
+            return self._persona_inertia
+        return self._config.INERTIA_FACTOR
 
     def apply_decay(self, current_pad: PADVector, hours_elapsed: float) -> PADVector:
         decay_amount = self._config.DECAY_RATE_PER_HOUR * hours_elapsed
-        neutral = PADVector()
+        neutral = PADVector(self._persona_base_valence, self._persona_base_arousal, 0.0)
         
         return PADVector(
             current_pad.valence * (1 - decay_amount) + neutral.valence * decay_amount,
@@ -331,7 +419,8 @@ class EmotionDynamics:
         )
 
     def blend_with_inertia(self, current: PADVector, target: PADVector, intensity: float, trust: float) -> PADVector:
-        inertia = self._config.INERTIA_FACTOR * (1 - trust * self._config.TRUST_INFLUENCE)
+        effective_inertia = self.get_effective_inertia()
+        inertia = effective_inertia * (1 - trust * self._config.TRUST_INFLUENCE)
         weight = (1 - inertia) * intensity
         return current.blend(target, weight)
 
@@ -358,6 +447,7 @@ class Amygdala:
         self._openrouter = None
         self._detector = None
         self._dynamics = EmotionDynamics(self._config)
+        self._current_persona_calibration: Optional[Dict] = None
 
         self._brain = None
 
@@ -369,6 +459,101 @@ class Amygdala:
     @property
     def hippocampus(self):
         return self._brain.hippocampus if self._brain else None
+
+    def apply_persona_calibration(self, calibration: Dict) -> None:
+        if not calibration:
+            return
+        
+        self._current_persona_calibration = calibration
+        
+        emotional_inertia = calibration.get("emotional_inertia", 0.7)
+        base_arousal = calibration.get("base_arousal", 0.0)
+        base_valence = calibration.get("base_valence", 0.0)
+        
+        self._dynamics.set_persona_calibration(emotional_inertia, base_arousal, base_valence)
+        
+        self._state.pad_arousal = base_arousal
+        self._state.pad_valence = base_valence
+
+    async def sync_with_persona(self, persona: Dict) -> None:
+        if not persona:
+            return
+        
+        calibration = persona.get("calibration", {})
+        self.apply_persona_calibration(calibration)
+        
+        identity_anchor = calibration.get("identity_anchor", "")
+        if identity_anchor:
+            self._config.PERSONA = persona.get("name", self._config.PERSONA)
+
+    def get_hardware_mood_modifier(self) -> PADVector:
+        status = HardwareMonitor.get_status()
+        if not status.is_available:
+            return PADVector(0.0, 0.0, 0.0)
+        
+        valence_mod = 0.0
+        arousal_mod = 0.0
+        dominance_mod = 0.0
+        
+        if status.temperature is not None:
+            if status.temperature >= 80:
+                arousal_mod += 0.3
+                valence_mod -= 0.2
+            elif status.temperature >= 70:
+                arousal_mod += 0.15
+        
+        if status.cpu_percent >= 90:
+            dominance_mod -= 0.2
+            arousal_mod += 0.2
+        elif status.cpu_percent >= 70:
+            arousal_mod += 0.1
+        
+        if status.ram_percent >= 90:
+            valence_mod -= 0.15
+        elif status.ram_percent >= 80:
+            valence_mod -= 0.05
+        
+        return PADVector(valence_mod, arousal_mod, dominance_mod)
+    
+    def apply_hardware_mood(self) -> None:
+        modifier = self.get_hardware_mood_modifier()
+        if modifier.valence == 0 and modifier.arousal == 0 and modifier.dominance == 0:
+            return
+        
+        current = self.current_pad
+        new_pad = PADVector(
+            max(-1.0, min(1.0, current.valence + modifier.valence)),
+            max(-1.0, min(1.0, current.arousal + modifier.arousal)),
+            max(-1.0, min(1.0, current.dominance + modifier.dominance))
+        )
+        self._state.update_pad(new_pad)
+    
+    def get_hardware_status(self) -> HardwareStatus:
+        return HardwareMonitor.get_status()
+    
+    def should_daydream(self) -> bool:
+        now = datetime.now()
+        hour = now.hour
+        
+        is_night_time = hour >= 22 or hour < 6
+        
+        is_idle = False
+        if self._state.last_interaction:
+            hours_since = (now - self._state.last_interaction).total_seconds() / 3600
+            is_idle = hours_since >= 2
+        
+        is_weekend = now.weekday() >= 5
+        
+        return is_night_time or is_idle or (is_weekend and hour >= 10 and hour <= 14)
+    
+    async def trigger_daydream(self) -> Optional[Dict]:
+        if not self.hippocampus:
+            return None
+        
+        try:
+            return await self.hippocampus.run_daydream_cycle()
+        except Exception:
+            return None
 
     async def load_state(self) -> None:
         if not self.hippocampus:
@@ -494,6 +679,7 @@ class Amygdala:
 
     async def process_user_input(self, text: str, context: Optional[Dict] = None) -> None:
         self.apply_emotion_decay()
+        self.apply_hardware_mood()
         
         detected_emotion, intensity = await self._detector.detect(text)
         
@@ -635,6 +821,17 @@ class Amygdala:
             instruction += "\n- Trust level: HIGH. Be more open and personal in communication."
         elif self._state.trust_level < 0.3:
             instruction += "\n- Trust level: LOW. Be more careful and build rapport gradually."
+
+        hw_status = self.get_hardware_status()
+        if hw_status.is_available:
+            hw_mood = hw_status.get_mood_description()
+            if hw_mood != "normal":
+                if "overheating" in hw_mood:
+                    instruction += "\n- System stress: HIGH TEMPERATURE. You feel irritable and want to be more brief."
+                if "overwhelmed" in hw_mood:
+                    instruction += "\n- System stress: HIGH CPU. You feel overwhelmed, try to focus responses."
+                if "mentally_exhausted" in hw_mood:
+                    instruction += "\n- System stress: HIGH RAM. You feel mentally tired, may need short breaks."
 
         return instruction
 

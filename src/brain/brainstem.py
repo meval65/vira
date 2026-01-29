@@ -33,12 +33,13 @@ METEOSOURCE_API_KEY: Optional[str] = os.getenv("METEOSOURCE_API_KEY")
 
 OPENROUTER_MODELS: Dict[str, List[str]] = {
     "chat_model": [
-        "nvidia/nemotron-3-nano-30b-a3b:free",
         "deepseek/deepseek-v3.2",
+        "tngtech/deepseek-r1t2-chimera:free",
         "openai/gpt-oss-120b:free",
     ],
     "analysis_model": [
         "tngtech/deepseek-r1t2-chimera:free",
+
         "openai/gpt-oss-120b:free",
     ],
     "utility_model": [
@@ -48,20 +49,20 @@ OPENROUTER_MODELS: Dict[str, List[str]] = {
 }
 
 @lru_cache(maxsize=1)
-def get_heavy_model() -> str:
+def get_main_chat_model() -> str:
     return OPENROUTER_MODELS.get("chat_model", ["nvidia/nemotron-3-nano-30b-a3b:free"])[0]
 
 @lru_cache(maxsize=1)
-def get_chat_model() -> str:
+def get_analysis_model() -> str:
     return OPENROUTER_MODELS.get("analysis_model", ["nvidia/nemotron-3-nano-30b-a3b:free"])[0]
 
 @lru_cache(maxsize=1)
-def get_light_model() -> str:
+def get_utility_model() -> str:
     return OPENROUTER_MODELS.get("utility_model", ["nvidia/nemotron-3-nano-30b-a3b:free"])[0]
 
 EMBEDDING_DIMENSION: int = 1024
 MAX_RETRIEVED_MEMORIES: int = 3
-MIN_RELEVANCE_SCORE: float = 0.6
+MIN_RELEVANCE_SCORE: float = 0.82
 DECAY_DAYS_EMOTION: int = 7
 DECAY_DAYS_GENERAL: int = 60
 
@@ -87,7 +88,7 @@ class MoodState(str, Enum):
 
 class SystemConfig(BaseModel):
     admin_id: str = Field(default="")
-    chat_model: str = Field(default_factory=get_chat_model)
+    chat_model: str = Field(default_factory=get_analysis_model)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     top_p: float = Field(default=0.95, ge=0.0, le=1.0)
     max_output_tokens: int = Field(default=512, ge=1)
@@ -143,18 +144,21 @@ class NeuralEventBus:
         
         cls._recent_events.append(event)
         
-        tasks = []
         for subscriber in cls._subscribers:
             try:
                 if asyncio.iscoroutinefunction(subscriber):
-                    tasks.append(asyncio.create_task(subscriber(event)))
+                    asyncio.create_task(cls._safe_call_subscriber(subscriber, event))
                 else:
                     subscriber(event)
-            except Exception as e:
-                logging.error(f"Subscriber error: {e}")
-        
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            except Exception:
+                pass
+    
+    @classmethod
+    async def _safe_call_subscriber(cls, subscriber: Callable, event: Dict) -> None:
+        try:
+            await subscriber(event)
+        except Exception as e:
+            logging.error(f"Subscriber error: {e}")
     
     @classmethod
     def get_recent_events(cls, limit: int = 20) -> List[Dict]:
@@ -546,7 +550,7 @@ class BrainStem:
             logger.info(f"OpenRouter API: {'Configured' if api_status['api_configured'] else 'Not configured'}")
             
             logger.info("Neural System Ready")
-            logger.info(f"Primary Model: {get_chat_model()}")
+            logger.info(f"Primary Model: {get_main_chat_model()}")
             logger.info(f"Admin: {self.config.admin_id}")
         except Exception as e:
             logger.exception(f"Initialization failed: {e}")
@@ -635,16 +639,16 @@ class BrainStem:
             except Exception as e:
                 logger.error(f"Memory compression error: {e}")
 
-_brain_instance: Optional[BrainStem] = None
-_brain_lock = asyncio.Lock()
+_global_brain: Optional[BrainStem] = None
+_brain_init_lock = asyncio.Lock()
 
 async def get_brain() -> BrainStem:
-    global _brain_instance
-    if _brain_instance is None:
-        async with _brain_lock:
-            if _brain_instance is None:
-                _brain_instance = BrainStem()
-    return _brain_instance
+    global _global_brain
+    if _global_brain is None:
+        async with _brain_init_lock:
+            if _global_brain is None:
+                _global_brain = BrainStem()
+    return _global_brain
 
 async def post_init(app: Application) -> None:
     logger.info("Initializing Neural System...")

@@ -48,12 +48,10 @@ def check_rate_limit(user_id: str) -> bool:
 
 
 def update_activity(user_id: str) -> None:
-    """Update last activity timestamp for user."""
     USER_LAST_ACTIVITY[user_id] = datetime.now()
 
 
 def escape_markdown(text: str) -> str:
-    """Escape special characters for Telegram MarkdownV2."""
     special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
     for char in special_chars:
         text = text.replace(char, f'\\{char}')
@@ -61,7 +59,6 @@ def escape_markdown(text: str) -> str:
 
 
 async def read_file_content(file_path: str) -> str:
-    """Read file content with encoding fallback."""
     try:
         def _read_safe():
             if os.path.getsize(file_path) > MAX_FILE_SIZE:
@@ -86,7 +83,6 @@ async def read_file_content(file_path: str) -> str:
 
 
 async def send_chunked_response(update: Update, text: str) -> None:
-    """Send long messages in chunks to avoid Telegram limits."""
     if not text:
         return
 
@@ -109,7 +105,6 @@ async def send_chunked_response(update: Update, text: str) -> None:
         try:
             await update.message.reply_text(chunk, parse_mode=ParseMode.MARKDOWN)
         except TelegramError:
-            # Fallback to plain text if Markdown parsing fails
             await update.message.reply_text(chunk, parse_mode=None)
 
         if text:
@@ -117,7 +112,6 @@ async def send_chunked_response(update: Update, text: str) -> None:
 
 
 async def handle_document(update: Update, user_dir: str, text_input: str) -> Optional[str]:
-    """Handle document uploads."""
     import uuid
     doc = update.message.document
     fname = doc.file_name or "file.txt"
@@ -158,7 +152,6 @@ async def handle_document(update: Update, user_dir: str, text_input: str) -> Opt
 
 
 async def handle_photo(update: Update, user_dir: str) -> Optional[str]:
-    """Handle photo uploads."""
     import uuid
     os.makedirs(user_dir, exist_ok=True)
 

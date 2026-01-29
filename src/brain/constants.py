@@ -76,3 +76,40 @@ Output JSON Format:
   "confidence": 0.0 to 1.0
 }
 """
+
+UNIFIED_ANALYSIS_INSTRUCTION = """
+Analyze the user's input comprehensively for intent, emotion, and tool requirements.
+
+Available Tools:
+{tools_description}
+
+Output JSON Format:
+{
+  "intent_type": "question|statement|request|greeting|command|small_talk|confirmation|correction",
+  "request_type": "information|recommendation|memory_recall|opinion|action|schedule|general_chat",
+  "entities": ["list", "of", "key", "entities"],
+  "search_query": "Optimized query for memory search",
+  "emotion": "neutral|happy|sad|concerned|angry|excited|anxious|proud",
+  "emotion_intensity": 0.0 to 1.0,
+  "tool_needed": null,
+  "sentiment": "positive|neutral|negative",
+  "needs_memory": true|false,
+  "confidence": 0.0 to 1.0
+}
+
+If a tool is needed, set tool_needed to: {"tool": "tool_name", "args": {"arg": "value"}}
+If no tool needed, set tool_needed to null.
+"""
+
+FILLER_WORDS = {
+    "hai", "halo", "hi", "hello", "hey", "hei", "yo",
+    "oke", "ok", "okay", "okey", "iya", "ya", "yaa", "yup", "yep", "yoi",
+    "hmm", "hm", "eh", "oh", "wah", "ah", "uh", "uhm", "umm",
+    "thanks", "makasih", "terima kasih", "thx", "ty", "tq",
+    "pls", "please", "tolong", "dong", "deh", "sih", "nih", "tuh",
+    "pagi", "siang", "sore", "malam", "selamat",
+    "bye", "dah", "dadah", "sampai", "jumpa",
+    "wkwk", "wkwkwk", "haha", "hehe", "hihi", "lol", "lmao",
+    "gak", "ga", "nggak", "enggak", "tidak", "bukan",
+    "apa", "siapa", "kapan", "dimana", "gimana", "kenapa"
+}
