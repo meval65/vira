@@ -4,7 +4,7 @@ import json
 import math
 from enum import Enum
 from typing import Optional, Dict, List, Set, Tuple, Any, Callable
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dt_time
 from dataclasses import dataclass, field
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, validator
@@ -13,10 +13,19 @@ from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     filters, Application, Defaults, CallbackQueryHandler
 )
+from telegram.request import HTTPXRequest
 import httpx
 import logging
 from functools import lru_cache
 from collections import deque
+
+from src.brain.infrastructure.neural_event_bus import (
+    NeuralEventBus,
+    NeuralEventBusRedis,
+    init_event_bus,
+    get_event_bus
+)
+from src.brain.infrastructure.redis_client import init_redis, close_redis
 
 load_dotenv()
 
@@ -28,7 +37,7 @@ OPENROUTER_BASE_URL: str = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.
 OPENROUTER_SITE_URL: str = os.getenv("OPENROUTER_SITE_URL", "https://vira-os.local")
 OPENROUTER_APP_NAME: str = os.getenv("OPENROUTER_APP_NAME", "Vira Personal Life OS")
 OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
-EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "bge-m3")
+EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "embeddinggemma")
 METEOSOURCE_API_KEY: Optional[str] = os.getenv("METEOSOURCE_API_KEY")
 
 OPENROUTER_MODELS: Dict[str, List[str]] = {
@@ -39,7 +48,6 @@ OPENROUTER_MODELS: Dict[str, List[str]] = {
     ],
     "analysis_model": [
         "tngtech/deepseek-r1t2-chimera:free",
-
         "openai/gpt-oss-120b:free",
     ],
     "utility_model": [
@@ -100,101 +108,6 @@ class SystemConfig(BaseModel):
 
 SYSTEM_CONFIG = SystemConfig(admin_id=ADMIN_ID)
 
-class NeuralEventBus:
-    _current_activity: Dict[str, str] = {}
-    _subscribers: List[Callable] = []
-    _recent_events: deque = deque(maxlen=50)
-    _lock = asyncio.Lock()
-    
-    @classmethod
-    def subscribe(cls, callback: Callable) -> None:
-        if callback not in cls._subscribers:
-            cls._subscribers.append(callback)
-    
-    @classmethod
-    def unsubscribe(cls, callback: Callable) -> None:
-        if callback in cls._subscribers:
-            cls._subscribers.remove(callback)
-            
-    @classmethod
-    async def set_activity(cls, module: str, description: str, payload: Optional[Dict] = None) -> None:
-        module = module.lower().replace(" ", "_")
-        async with cls._lock:
-            if cls._current_activity.get(module) != description:
-                cls._current_activity[module] = description
-        await cls.emit(module, "dashboard", "activity_update", payload=payload)
-
-    @classmethod
-    async def clear_activity(cls, module: str) -> None:
-        module = module.lower().replace(" ", "_")
-        async with cls._lock:
-            cls._current_activity.pop(module, None)
-        await cls.emit(module, "dashboard", "activity_update")
-    
-    @classmethod
-    async def emit(cls, source: str, target: str, event_type: str = "signal", payload: Optional[Dict] = None) -> None:
-        event = {
-            "source": source,
-            "target": target,
-            "type": event_type,
-            "activities": cls._current_activity.copy(),
-            "payload": payload or {},
-            "timestamp": datetime.now().isoformat()
-        }
-        
-        cls._recent_events.append(event)
-        
-        for subscriber in cls._subscribers:
-            try:
-                if asyncio.iscoroutinefunction(subscriber):
-                    asyncio.create_task(cls._safe_call_subscriber(subscriber, event))
-                else:
-                    subscriber(event)
-            except Exception:
-                pass
-    
-    @classmethod
-    async def _safe_call_subscriber(cls, subscriber: Callable, event: Dict) -> None:
-        try:
-            await subscriber(event)
-        except Exception as e:
-            logging.error(f"Subscriber error: {e}")
-    
-    @classmethod
-    def get_recent_events(cls, limit: int = 20) -> List[Dict]:
-        return list(cls._recent_events)[-limit:]
-    
-    @classmethod
-    def get_module_states(cls) -> Dict[str, Any]:
-        now = datetime.now()
-        active_threshold = timedelta(seconds=5)
-        
-        modules = {
-            "brainstem": "idle",
-            "hippocampus": "idle",
-            "amygdala": "idle",
-            "thalamus": "idle",
-            "prefrontal_cortex": "idle",
-            "motor_cortex": "idle",
-            "cerebellum": "idle",
-            "occipital_lobe": "active",
-            "medulla_oblongata": "idle"
-        }
-        
-        for event in list(cls._recent_events)[-20:]:
-            try:
-                event_time = datetime.fromisoformat(event["timestamp"])
-                if now - event_time < active_threshold:
-                    if event["source"] in modules:
-                        modules[event["source"]] = "active"
-                    if event["target"] in modules:
-                        modules[event["target"]] = "active"
-            except (ValueError, KeyError):
-                continue
-        
-        modules["_meta"] = {"activities": cls._current_activity.copy()}
-        
-        return modules
 
 logger = logging.getLogger(__name__)
 
@@ -483,6 +396,9 @@ class BrainStem:
         self._app = None
         self._openrouter = OpenRouterClient()
         self._shutdown_event = asyncio.Event()
+        self._event_bus: Optional[NeuralEventBusRedis] = None
+        self._redis_initialized = False
+        self._consolidator = None
     
     @property
     def hippocampus(self):
@@ -511,6 +427,18 @@ class BrainStem:
             from src.brain.amygdala import Amygdala
             from src.brain.thalamus import Thalamus
             from src.brain.parietal_lobe import ParietalLobe
+            from src.brain.db.mongo_client import get_mongo_client
+
+            try:
+                await init_redis()
+                mongo = get_mongo_client()
+                self._event_bus = await init_event_bus(mongo)
+                self._redis_initialized = True
+                logger.info("Redis Event Bus initialized")
+            except Exception as e:
+                logger.warning(f"Redis unavailable, using in-memory fallback: {e}")
+                self._event_bus = get_event_bus()
+                self._redis_initialized = False
 
             self._hippocampus = Hippocampus()
             self._amygdala = Amygdala()
@@ -552,6 +480,20 @@ class BrainStem:
             logger.info("Neural System Ready")
             logger.info(f"Primary Model: {get_main_chat_model()}")
             logger.info(f"Admin: {self.config.admin_id}")
+            
+            event_bus_status = self._event_bus.get_status() if self._event_bus else {}
+            logger.info(f"Event Bus: Redis={'connected' if event_bus_status.get('redis_connected') else 'fallback'}")
+            
+            try:
+                from src.brain.consolidation.nocturnal_consolidator import NocturnalConsolidator
+                self._consolidator = NocturnalConsolidator(
+                    hippocampus=self._hippocampus,
+                    openrouter_client=self._openrouter,
+                    mongo_client=mongo
+                )
+                logger.info("Nocturnal Consolidator initialized")
+            except Exception as e:
+                logger.warning(f"Consolidator initialization failed: {e}")
         except Exception as e:
             logger.exception(f"Initialization failed: {e}")
             raise
@@ -578,7 +520,13 @@ class BrainStem:
                 interval=self.config.memory_compression_interval,
                 first=900
             )
-            logger.info("Background jobs scheduled")
+            
+            app.job_queue.run_daily(
+                self._background_consolidation,
+                time=dt_time(hour=3, minute=0, second=0)
+            )
+            
+            logger.info("Background jobs scheduled (including 3 AM consolidation)")
         except Exception as e:
             logger.error(f"Background jobs failed: {e}")
 
@@ -591,6 +539,10 @@ class BrainStem:
             await self._hippocampus.close()
         if self._openrouter:
             await self._openrouter.close()
+        
+        if self._event_bus:
+            await self._event_bus.shutdown()
+        await close_redis()
         
         logger.info("Neural System Shutdown Complete")
 
@@ -638,6 +590,32 @@ class BrainStem:
                 await NeuralEventBus.clear_activity("cerebellum")
             except Exception as e:
                 logger.error(f"Memory compression error: {e}")
+    
+    async def _background_consolidation(self, context) -> None:
+        if self._consolidator and not self._shutdown_event.is_set():
+            try:
+                await NeuralEventBus.set_activity("cerebellum", "Running Nocturnal Consolidation")
+                result = await self._consolidator.run_consolidation(force=True)
+                
+                if result.success:
+                    await NeuralEventBus.emit(
+                        "cerebellum", "dashboard", "consolidation_complete",
+                        payload={
+                            "memories_created": result.memories_created,
+                            "kg_triples": result.kg_triples_created,
+                            "duration": result.duration_seconds
+                        }
+                    )
+                    logger.info(
+                        f"Consolidation complete: {result.memories_created} memories, "
+                        f"{result.kg_triples_created} KG triples"
+                    )
+                else:
+                    logger.warning(f"Consolidation failed: {result.error}")
+                    
+                await NeuralEventBus.clear_activity("cerebellum")
+            except Exception as e:
+                logger.error(f"Consolidation error: {e}")
 
 _global_brain: Optional[BrainStem] = None
 _brain_init_lock = asyncio.Lock()
@@ -719,6 +697,8 @@ def main() -> None:
         .token(TELEGRAM_TOKEN)
         .post_init(post_init)
         .post_shutdown(custom_shutdown)
+        .request(HTTPXRequest(connect_timeout=20.0, read_timeout=20.0))
+        .get_updates_request(HTTPXRequest(connect_timeout=20.0, read_timeout=20.0))
         .defaults(Defaults(parse_mode=ParseMode.MARKDOWN))
         .concurrent_updates(True)
         .build()

@@ -10,7 +10,6 @@ from src.brain.brainstem import NeuralEventBus
 logger = logging.getLogger(__name__)
 
 def get_brain_from_context(context: ContextTypes.DEFAULT_TYPE):
-    """Get brain instance from context."""
     return context.bot_data.get('brain')
 
 async def background_maintenance(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -40,7 +39,6 @@ async def background_maintenance(context: ContextTypes.DEFAULT_TYPE) -> None:
         await NeuralEventBus.clear_activity("cerebellum")
 
 async def background_memory_optimization(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Optimize and consolidate memories - runs every 2 hours."""
     brain = get_brain_from_context(context)
     if not brain or not brain.hippocampus:
         return
@@ -62,9 +60,6 @@ async def background_memory_optimization(context: ContextTypes.DEFAULT_TYPE) -> 
         await NeuralEventBus.clear_activity("cerebellum")
 
 async def background_memory_compression(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Check and compress memories into Global Context - runs every 30 minutes.
-    """
     brain = get_brain_from_context(context)
     if not brain or not brain.hippocampus:
         return
@@ -112,7 +107,6 @@ async def background_memory_compression(context: ContextTypes.DEFAULT_TYPE) -> N
         await NeuralEventBus.clear_activity("cerebellum")
 
 async def background_session_cleanup(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Cleanup stale sessions - runs every 30 minutes."""
     brain = get_brain_from_context(context)
     if not brain or not brain.thalamus:
         return
@@ -128,7 +122,6 @@ async def background_session_cleanup(context: ContextTypes.DEFAULT_TYPE) -> None
         await NeuralEventBus.clear_activity("cerebellum")
 
 async def background_schedule_checker(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Check and execute due schedules - runs every minute."""
     brain = get_brain_from_context(context)
     if not brain or not brain.hippocampus:
         return
@@ -180,7 +173,6 @@ async def background_schedule_checker(context: ContextTypes.DEFAULT_TYPE) -> Non
         logger.error(f"❌ Schedule checker failed: {e}")
 
 async def background_emotional_decay(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Gradually return emotional state to neutral - runs hourly."""
     brain = get_brain_from_context(context)
     if not brain or not brain.amygdala:
         return
@@ -207,7 +199,6 @@ async def background_emotional_decay(context: ContextTypes.DEFAULT_TYPE) -> None
         await NeuralEventBus.clear_activity("cerebellum")
 
 async def background_proactive_check(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Check for proactive engagement opportunities - runs every 30 minutes."""
     brain = get_brain_from_context(context)
     if not brain or not brain.thalamus:
         return
@@ -245,7 +236,6 @@ async def background_proactive_check(context: ContextTypes.DEFAULT_TYPE) -> None
         await NeuralEventBus.clear_activity("cerebellum")
 
 async def background_topic_analysis(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Analyze conversation topics - runs every hour."""
     brain = get_brain_from_context(context)
     if not brain or not brain.hippocampus:
         return
@@ -260,7 +250,6 @@ async def background_topic_analysis(context: ContextTypes.DEFAULT_TYPE) -> None:
         await NeuralEventBus.clear_activity("cerebellum")
 
 async def background_health_check(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """System health monitoring - runs every 5 minutes."""
     brain = get_brain_from_context(context)
     if not brain:
         return
@@ -289,7 +278,6 @@ async def background_health_check(context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.error(f"❌ Health check failed: {e}")
 
 def register_background_jobs(app) -> None:
-    """Register all background jobs with the application."""
     if not app.job_queue:
         logger.warning("Job queue not available, skipping background jobs")
         return
@@ -369,7 +357,6 @@ def register_background_jobs(app) -> None:
     logger.info("   - Topic analysis: every 1 hour")
 
 async def trigger_memory_compression_manual(brain) -> Dict[str, Any]:
-    """Manually trigger memory compression."""
     if not brain or not brain.hippocampus:
         return {"status": "error", "message": "Brain not initialized"}
     
@@ -394,7 +381,6 @@ async def trigger_memory_compression_manual(brain) -> Dict[str, Any]:
         return {"status": "error", "message": str(e)}
 
 async def trigger_maintenance_manual(brain) -> Dict[str, Any]:
-    """Manually trigger maintenance tasks."""
     if not brain or not brain.hippocampus:
         return {"status": "error", "message": "Brain not initialized"}
     

@@ -11,8 +11,7 @@ from telegram.error import TelegramError
 
 logger = logging.getLogger(__name__)
 
-# Constants
-MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
+MAX_FILE_SIZE = 5 * 1024 * 1024
 RATE_LIMIT_MAX = 20
 RATE_LIMIT_WINDOW = 60
 ALLOWED_EXTENSIONS: Set[str] = {
@@ -20,21 +19,18 @@ ALLOWED_EXTENSIONS: Set[str] = {
     '.js', '.css', '.xml', '.yaml', '.yml', '.log', '.ini'
 }
 
-# User management state
 USER_LOCKS: Dict[str, asyncio.Lock] = {}
 USER_LAST_ACTIVITY: Dict[str, datetime] = {}
 RATE_LIMIT_TOKENS: Dict[str, Deque[datetime]] = defaultdict(lambda: deque(maxlen=RATE_LIMIT_MAX))
 
 
 async def get_user_lock(user_id: str) -> asyncio.Lock:
-    """Get or create a lock for a specific user."""
     if user_id not in USER_LOCKS:
         USER_LOCKS[user_id] = asyncio.Lock()
     return USER_LOCKS[user_id]
 
 
 def check_rate_limit(user_id: str) -> bool:
-    """Check if user has exceeded rate limit."""
     now = datetime.now()
     queue = RATE_LIMIT_TOKENS[user_id]
 
