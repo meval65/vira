@@ -640,10 +640,8 @@ async def post_shutdown(app: Application) -> None:
 def main() -> None:
     import threading
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
+    from src.brain.utils.logging_config import setup_logging
+    setup_logging(level=logging.ERROR)
 
     if not TELEGRAM_TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN not found")
@@ -716,8 +714,7 @@ def main() -> None:
         handle_msg
     ))
 
-    logger.info("Vira Personal Life OS Starting...")
-    logger.info("=" * 50)
+    print("Vira is running. Dashboard: http://localhost:5000  (Ctrl+C to stop)")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':

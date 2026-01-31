@@ -115,9 +115,15 @@ async def create_persona(data: PersonaCreate):
     }
     
     result = await mongo.personas.insert_one(persona_doc)
-    persona_doc["id"] = str(result.inserted_id)
-    
-    return persona_doc
+    return {
+        "id": str(result.inserted_id),
+        "name": data.name,
+        "description": data.description or "",
+        "instruction": data.instruction,
+        "temperature": data.temperature,
+        "voice_tone": data.voice_tone or "friendly",
+        "is_active": False,
+    }
 
 
 @router.put("/{persona_id}")

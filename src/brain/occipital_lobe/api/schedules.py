@@ -18,6 +18,8 @@ async def get_schedules(
 ):
     if upcoming:
         brain = await get_brain()
+        if not brain or not brain.hippocampus:
+            return []
         return await brain.hippocampus.get_pending_schedules(limit=limit)
     
     mongo = get_mongo()
@@ -61,6 +63,8 @@ async def get_schedule_by_id(schedule_id: str):
 async def create_schedule(schedule: ScheduleCreate):
     try:
         brain = await get_brain()
+        if not brain or not brain.hippocampus:
+            raise HTTPException(status_code=503, detail="Brain not initialized")
         schedule_id = await brain.hippocampus.add_schedule(
             trigger_time=datetime.fromisoformat(schedule.scheduled_at),
             context=schedule.context,
@@ -74,6 +78,8 @@ async def create_schedule(schedule: ScheduleCreate):
 async def update_schedule(schedule_id: str, schedule: ScheduleUpdate):
     updates = schedule.dict(exclude_unset=True)
     brain = await get_brain()
+    if not brain or not brain.hippocampus:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
     success = await brain.hippocampus.update_schedule(schedule_id, updates)
     if not success:
         raise HTTPException(status_code=404, detail="Schedule not found or update failed")
@@ -82,6 +88,8 @@ async def update_schedule(schedule_id: str, schedule: ScheduleUpdate):
 @router.delete("/{schedule_id}")
 async def delete_schedule(schedule_id: str):
     brain = await get_brain()
+    if not brain or not brain.hippocampus:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
     success = await brain.hippocampus.delete_schedule(schedule_id)
     if not success:
         raise HTTPException(status_code=404, detail="Schedule not found")

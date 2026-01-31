@@ -18,6 +18,8 @@ async def get_memories(
     memory_type: Optional[str] = Query(None)
 ):
     brain = await get_brain()
+    if not brain or not brain.hippocampus:
+        return []
     return await brain.hippocampus.list_memories(
         limit=limit,
         skip=skip,
@@ -55,6 +57,8 @@ async def get_memory_by_id(memory_id: str):
 async def create_memory(memory: MemoryCreate):
     try:
         brain = await get_brain()
+        if not brain or not brain.hippocampus:
+            raise HTTPException(status_code=503, detail="Brain not initialized")
         memory_id = await brain.hippocampus.store(
             summary=memory.summary,
             memory_type=memory.memory_type,
@@ -72,6 +76,8 @@ async def update_memory(memory_id: str, memory: MemoryUpdate):
         updates["type"] = updates.pop("memory_type")
         
     brain = await get_brain()
+    if not brain or not brain.hippocampus:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
     success = await brain.hippocampus.update_memory(memory_id, updates)
     if not success:
         raise HTTPException(status_code=404, detail="Memory not found or update failed")
@@ -80,6 +86,8 @@ async def update_memory(memory_id: str, memory: MemoryUpdate):
 @router.delete("/{memory_id}")
 async def delete_memory(memory_id: str, hard_delete: bool = Query(False)):
     brain = await get_brain()
+    if not brain or not brain.hippocampus:
+        raise HTTPException(status_code=503, detail="Brain not initialized")
     success = await brain.hippocampus.delete_memory(memory_id, hard_delete=hard_delete)
     if not success:
         raise HTTPException(status_code=404, detail="Memory not found")

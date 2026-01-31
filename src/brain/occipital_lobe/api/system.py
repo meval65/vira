@@ -1,7 +1,5 @@
-import os
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, FileResponse
 from src.brain.brainstem import ADMIN_ID, get_brain
 from src.brain.db.mongo_client import get_mongo_client
 from src.brain.occipital_lobe.types import AdminProfileUpdate, LogEntry
@@ -9,32 +7,10 @@ from src.brain.occipital_lobe.state import LOG_BUFFER, manager
 
 router = APIRouter(tags=["system"])
 
-DASHBOARD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "dashboard")
 
 def get_mongo():
     return get_mongo_client()
 
-@router.get("/", response_class=HTMLResponse)
-async def dashboard_page():
-    html_path = os.path.join(DASHBOARD_DIR, "index.html")
-    if os.path.exists(html_path):
-        with open(html_path, 'r', encoding='utf-8') as f:
-            return f.read()
-    return "<h1>Dashboard not found</h1>"
-
-@router.get("/styles.css")
-async def styles_css():
-    css_path = os.path.join(DASHBOARD_DIR, "styles.css")
-    if os.path.exists(css_path):
-        return FileResponse(css_path, media_type="text/css")
-    raise HTTPException(status_code=404)
-
-@router.get("/app.js")
-async def app_js():
-    js_path = os.path.join(DASHBOARD_DIR, "app.js")
-    if os.path.exists(js_path):
-        return FileResponse(js_path, media_type="application/javascript")
-    raise HTTPException(status_code=404)
 
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
