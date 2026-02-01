@@ -7,3 +7,5 @@ ALLOWED_EXTENSIONS: Set[str] = {
     ".txt", ".md", ".py", ".json", ".csv", ".html",
     ".js", ".css", ".xml", ".yaml", ".yml", ".log", ".ini",
 }
+
+

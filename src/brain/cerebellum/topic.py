@@ -17,3 +17,5 @@ async def background_topic_analysis(context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception as e:
         logger.error("Topic analysis failed: %s", e)
         await NeuralEventBus.clear_activity("cerebellum")
+
+

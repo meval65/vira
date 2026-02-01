@@ -78,3 +78,5 @@ class AdminProfile(BaseModel):
     additional_info: Optional[str] = None
     preferences: Dict[str, Any] = Field(default_factory=dict)
     last_updated: datetime = Field(default_factory=datetime.now)
+
+

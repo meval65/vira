@@ -84,7 +84,7 @@ class PrefrontalCortex:
         self.planner = PlanManager(self._openrouter, self.amygdala)
         
         if self.parietal_lobe:
-            from src.brain.db.mongo_client import get_mongo_client
+            from src.brain.infrastructure.mongo_client import get_mongo_client
             mongo = get_mongo_client()
             self._self_correction = SelfCorrectionLoop(
                 openrouter_client=self._openrouter,
@@ -789,3 +789,5 @@ Consider the traits and tone to determine appropriate emotional baseline."""
 
     def get_plan_progress(self) -> Optional[Dict[str, Any]]:
         return self.planner.get_plan_progress()
+
+

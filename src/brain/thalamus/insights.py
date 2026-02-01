@@ -188,11 +188,11 @@ Pesan:"""
             
             context_info = ""
             if global_ctx:
-                context_info = f"\n\nInformasi tentang user:\n{global_ctx[:500]}"
+                context_info = f"\n\nInformasi tentang user:\n{global_ctx}"
             
             persona_context = ""
             if persona_instruction:
-                persona_context = f"\n\nKarakter persona:\n{persona_instruction[:300]}"
+                persona_context = f"\n\nKarakter persona:\n{persona_instruction}"
             
             prompt = f"""Kamu adalah Vira, AI assistant yang akrab dengan user. Kamu baru mengenal user dan belum tau banyak tentang mereka (baru ada {memory_count} memori).
 
@@ -277,3 +277,5 @@ Pesan:"""
         else:
             days = int(hours / 24)
             return f"{days} days ago"
+
+

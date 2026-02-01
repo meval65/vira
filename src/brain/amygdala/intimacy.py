@@ -54,3 +54,5 @@ class SocialIntimacyLayer:
             "negative_streak": self.negative_streak,
             "formality_floor": self.get_formality_adjustment()
         }
+
+

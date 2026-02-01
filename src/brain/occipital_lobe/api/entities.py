@@ -3,7 +3,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from src.brain.occipital_lobe.types import EntityCreate, EntityUpdate
 from src.brain.occipital_lobe.state import manager
-from src.brain.db.mongo_client import get_mongo_client
+from src.brain.infrastructure.mongo_client import get_mongo_client
 
 router = APIRouter(prefix="/api/entities", tags=["entities"])
 
@@ -110,3 +110,5 @@ async def delete_entity(entity_name: str):
     
     await manager.broadcast("entity_update", {"action": "deleted", "name": entity_name})
     return {"status": "deleted"}
+
+

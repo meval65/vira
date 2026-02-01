@@ -12,7 +12,8 @@ from src.brain.brainstem import get_brain
 from src.brain.occipital_lobe.state import manager
 from src.brain.occipital_lobe.api import (
     memories, triples, schedules, entities, chat_logs, system,
-    personas, config, maintenance, openrouter, neural_events, search
+    personas, config, maintenance, openrouter, neural_events, search,
+    brain_state, tools
 )
 
 logger = logging.getLogger(__name__)
@@ -85,6 +86,8 @@ app.include_router(maintenance.router)
 app.include_router(openrouter.router)
 app.include_router(neural_events.router)
 app.include_router(search.router)
+app.include_router(brain_state.router)
+app.include_router(tools.router)
 
 
 async def bridge_neural_events(event: dict):
@@ -113,3 +116,5 @@ async def shutdown_event():
     brain = await get_brain()
     if brain:
         await brain.shutdown()
+
+

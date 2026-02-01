@@ -132,3 +132,5 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         text=msg,
         reply_markup=InlineKeyboardMarkup(kb),
     )
+
+

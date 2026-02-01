@@ -172,3 +172,5 @@ class EmotionConfig:
             "prefix": ["Gimana lanjutannya?", "Jangan lupa ya..."]
         }
     }
+
+

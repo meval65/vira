@@ -51,3 +51,5 @@ class SessionMessage:
     timestamp: datetime.datetime = field(default_factory=datetime.datetime.now)
     image_path: Optional[str] = None
     embedding: Optional[List[float]] = None
+
+

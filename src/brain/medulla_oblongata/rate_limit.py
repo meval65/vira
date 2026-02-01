@@ -31,3 +31,5 @@ def check_rate_limit(user_id: str) -> bool:
 
 def update_activity(user_id: str) -> None:
     USER_LAST_ACTIVITY[user_id] = datetime.now()
+
+

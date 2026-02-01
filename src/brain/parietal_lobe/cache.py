@@ -27,3 +27,5 @@ class LRUCache:
         self._cache[hashed_key] = (value, datetime.now())
         if len(self._cache) > self._max_size:
             self._cache.popitem(last=False)
+
+

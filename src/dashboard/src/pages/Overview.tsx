@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { api, formatDate } from '../api';
 import type { Stats, Health, LogEntry, ChatLog } from '../types';
 import type { WsMessage } from '../types';
+import { NeuralBrain } from '../components/NeuralBrain';
+import { ToolsPanel } from '../components/ToolsPanel';
 
 interface OverviewProps {
   lastWsEvent: WsMessage | null;
@@ -50,20 +52,22 @@ export function Overview({ lastWsEvent }: OverviewProps): React.ReactNode {
 
   return (
     <section className="tab-content active">
-      {health && (
-        <div className="panel" style={{ marginBottom: '24px' }}>
-          <div className="panel-header">
-            <h3>System Health</h3>
+      {/* Neural Brain Visualization */}
+      <div className="panel overview-brain-section">
+        <div className="panel-header">
+          <h3>🧠 Neural Activity</h3>
+          {health && (
             <span className={`badge ${health.status === 'healthy' ? 'badge-success' : 'badge-danger'}`}>
-              {health.status === 'healthy' ? 'Healthy' : 'Unhealthy'}
+              {health.status === 'healthy' ? 'System Healthy' : 'System Issue'}
             </span>
-          </div>
-          <div className="panel-body" style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
-            <span>Database: {health.database ?? 'N/A'}</span>
-            {health.error && <span style={{ color: 'var(--danger)' }}>{health.error}</span>}
-          </div>
+          )}
         </div>
-      )}
+        <div className="panel-body">
+          <NeuralBrain lastWsEvent={lastWsEvent} />
+        </div>
+      </div>
+
+      {/* Stats Grid */}
       <div className="stats-grid">
         {[
           { icon: '💭', value: stats.memories ?? '--', label: 'Memories' },
@@ -82,9 +86,11 @@ export function Overview({ lastWsEvent }: OverviewProps): React.ReactNode {
           </div>
         ))}
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', marginTop: '24px' }}>
+
+      {/* Chat & Logs Grid */}
+      <div className="overview-grid">
         <div className="panel">
-          <div className="panel-header"><h3>Recent Chat</h3></div>
+          <div className="panel-header"><h3>💬 Recent Chat</h3></div>
           <div className="panel-body">
             {!chatLogs.length ? <p className="empty-state">No recent chat</p> : (
               chatLogs.map((log) => (
@@ -103,7 +109,7 @@ export function Overview({ lastWsEvent }: OverviewProps): React.ReactNode {
           </div>
         </div>
         <div className="panel">
-          <div className="panel-header"><h3>System Logs</h3></div>
+          <div className="panel-header"><h3>📋 System Logs</h3></div>
           <div className="panel-body" style={{ maxHeight: '320px', overflowY: 'auto' }}>
             {!systemLogs.length ? <p className="empty-state">No system logs</p> : (
               [...systemLogs].reverse().map((log, i) => (
@@ -117,6 +123,9 @@ export function Overview({ lastWsEvent }: OverviewProps): React.ReactNode {
           </div>
         </div>
       </div>
+
+      {/* Tools Panel */}
+      <ToolsPanel lastWsEvent={lastWsEvent} />
     </section>
   );
 }

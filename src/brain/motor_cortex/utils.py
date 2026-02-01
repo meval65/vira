@@ -26,3 +26,5 @@ async def send_chunked_response(update: Update, text: str) -> None:
             await update.message.reply_text(chunk, parse_mode=None)
         if text:
             await asyncio.sleep(0.5)
+
+

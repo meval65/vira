@@ -1,7 +1,7 @@
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from src.brain.brainstem import ADMIN_ID, get_brain
-from src.brain.db.mongo_client import get_mongo_client
+from src.brain.infrastructure.mongo_client import get_mongo_client
 from src.brain.occipital_lobe.types import AdminProfileUpdate, LogEntry
 from src.brain.occipital_lobe.state import LOG_BUFFER, manager
 
@@ -89,3 +89,5 @@ async def update_admin_profile(data: AdminProfileUpdate):
     )
     
     return {"status": "updated"}
+
+

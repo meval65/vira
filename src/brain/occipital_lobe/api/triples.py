@@ -2,7 +2,7 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Query
 from src.brain.brainstem import get_brain
 from src.brain.occipital_lobe.types import TripleCreate, TripleUpdate
-from src.brain.db.mongo_client import get_mongo_client
+from src.brain.infrastructure.mongo_client import get_mongo_client
 
 router = APIRouter(prefix="/api/triples", tags=["triples"])
 
@@ -139,3 +139,5 @@ async def delete_triple(triple_id: str):
     if not success:
         raise HTTPException(status_code=404, detail="Triple not found")
     return {"status": "deleted", "id": triple_id}
+
+

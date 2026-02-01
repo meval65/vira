@@ -4,7 +4,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from src.brain.occipital_lobe.types import ChatLogCreate
 from src.brain.occipital_lobe.state import manager
-from src.brain.db.mongo_client import get_mongo_client
+from src.brain.infrastructure.mongo_client import get_mongo_client
 
 router = APIRouter(prefix="/api/chat-logs", tags=["chat_logs"])
 
@@ -97,3 +97,5 @@ async def delete_chat_session(session_id: str):
     
     await manager.broadcast("chat_log_update", {"action": "session_deleted", "session_id": session_id, "count": result.deleted_count})
     return {"status": "deleted", "count": result.deleted_count}
+
+

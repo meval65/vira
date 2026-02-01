@@ -185,3 +185,5 @@ class VisualMemory:
             ))
         
         return memories
+
+

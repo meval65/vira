@@ -40,3 +40,5 @@ class HardwareMonitor:
             return cls._cached_status
         except Exception:
             return HardwareStatus(is_available=False)
+
+

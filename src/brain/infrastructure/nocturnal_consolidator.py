@@ -1,17 +1,3 @@
-"""
-Nocturnal Memory Consolidation for Vira Personal Life OS.
-
-This module processes daily episodic logs (chat history) into structured
-semantic memory during off-peak hours (default: 3 AM).
-
-The consolidation process:
-1. Fetches today's chat logs from MongoDB
-2. Extracts patterns, preferences, and facts using LLM
-3. Stores them as high-priority semantic memories
-4. Updates the Knowledge Graph with new entity relationships
-5. Logs the consolidation for auditing
-"""
-
 import asyncio
 import logging
 from datetime import datetime, timedelta
@@ -20,8 +6,6 @@ from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
-
-# LLM prompts for extraction
 PREFERENCE_EXTRACTION_PROMPT = """# PREFERENCE EXTRACTION
 
 Analyze these conversation logs and extract user preferences.
@@ -640,3 +624,5 @@ class NocturnalConsolidator:
             "total_kg_triples": total_triples,
             "last_run": self._last_consolidation.isoformat() if self._last_consolidation else None
         }
+
+

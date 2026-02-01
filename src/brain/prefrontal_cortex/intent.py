@@ -47,9 +47,6 @@ class IntentAnalyzer:
             return self._fallback_unified_analysis(text)
 
     async def extract_intent(self, text: str) -> Dict:
-        # Simplified wrapper or separate logic if needed, 
-        # but main logic is in analyze / _unified_analysis usually.
-        # This mirrors _extract_intent from original file
         cache_key = hashlib.md5(text.encode()).hexdigest()[:16]
         if cache_key in self._intent_cache:
             cached, timestamp = self._intent_cache[cache_key]
@@ -162,3 +159,5 @@ class IntentAnalyzer:
         count = len(self._intent_cache)
         self._intent_cache.clear()
         return count
+
+

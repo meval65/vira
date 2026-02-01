@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException, Query, Body, Depends
 from src.brain.brainstem import get_brain
 from src.brain.occipital_lobe.types import MemoryCreate, MemoryUpdate
 from src.brain.occipital_lobe.state import manager
-from src.brain.db.mongo_client import get_mongo_client
+from src.brain.infrastructure.mongo_client import get_mongo_client
 
 router = APIRouter(prefix="/api/memories", tags=["memories"])
 
@@ -111,3 +111,5 @@ async def bulk_delete_memories(memory_ids: List[str] = Body(...), hard_delete: b
     
     await manager.broadcast("memory_update", {"action": f"bulk_{action}", "count": deleted_count})
     return {"status": f"bulk_{action}", "count": deleted_count}
+
+

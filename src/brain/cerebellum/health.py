@@ -31,3 +31,5 @@ async def background_health_check(context: ContextTypes.DEFAULT_TYPE) -> None:
         )
     except Exception as e:
         logger.error("Health check failed: %s", e)
+
+

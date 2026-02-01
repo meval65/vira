@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from src.brain.db.mongo_client import get_mongo_client
+from src.brain.infrastructure.mongo_client import get_mongo_client
 from src.brain.brainstem import get_brain
 
 router = APIRouter(prefix="/api/search", tags=["search"])
@@ -53,3 +53,5 @@ async def search_entities(query: str, limit: int = 10):
         })
     
     return result
+
+

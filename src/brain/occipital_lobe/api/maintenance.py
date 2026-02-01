@@ -1,7 +1,7 @@
 from datetime import datetime
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from src.brain.db.mongo_client import get_mongo_client
+from src.brain.infrastructure.mongo_client import get_mongo_client
 from src.brain.brainstem import get_brain
 
 router = APIRouter(prefix="/api/maintenance", tags=["maintenance"])
@@ -104,3 +104,5 @@ async def optimize_graph():
         return {"status": "optimized", "duplicates_removed": removed}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+

@@ -101,3 +101,5 @@ class LogEntry(BaseModel):
     level: str
     message: str
     source: str = "system"
+
+

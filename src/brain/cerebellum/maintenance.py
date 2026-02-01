@@ -76,3 +76,5 @@ async def background_memory_compression(context: ContextTypes.DEFAULT_TYPE) -> N
             payload={"error": str(e)},
         )
         await NeuralEventBus.clear_activity("cerebellum")
+
+

@@ -251,3 +251,5 @@ def get_circuit_breaker(
 def get_all_circuit_breakers() -> dict:
     """Get status of all circuit breakers."""
     return {name: cb.get_status() for name, cb in _circuit_breakers.items()}
+
+

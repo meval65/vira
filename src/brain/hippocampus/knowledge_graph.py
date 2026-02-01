@@ -238,3 +238,5 @@ class KnowledgeGraph:
             },
             upsert=True
         )
+
+

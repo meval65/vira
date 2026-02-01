@@ -87,3 +87,5 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 os.remove(img_path)
             except OSError:
                 pass
+
+

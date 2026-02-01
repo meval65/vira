@@ -18,3 +18,5 @@ async def background_session_cleanup(context: ContextTypes.DEFAULT_TYPE) -> None
     except Exception as e:
         logger.error("Session cleanup failed: %s", e)
         await NeuralEventBus.clear_activity("cerebellum")
+
+

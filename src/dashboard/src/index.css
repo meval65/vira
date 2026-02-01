@@ -1,25 +1,31 @@
 :root {
-  --bg-primary: #0f0f1a;
-  --bg-secondary: #1a1a2e;
-  --bg-tertiary: #252542;
-  --bg-card: #1e1e35;
+  --bg-primary: #0a0a12;
+  --bg-secondary: #12121f;
+  --bg-tertiary: #1a1a2e;
+  --bg-card: rgba(30, 30, 53, 0.7);
+  --bg-glass: rgba(30, 30, 60, 0.4);
   --accent-primary: #6366f1;
   --accent-secondary: #8b5cf6;
-  --accent-gradient: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
-  --text-primary: #ffffff;
-  --text-secondary: #a0a0b8;
-  --text-muted: #6b6b80;
-  --border-color: #2d2d4a;
-  --success: #22c55e;
+  --accent-tertiary: #a78bfa;
+  --accent-gradient: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #a78bfa 100%);
+  --accent-glow: 0 0 20px rgba(139, 92, 246, 0.4);
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --border-color: rgba(99, 102, 241, 0.2);
+  --border-glow: rgba(139, 92, 246, 0.3);
+  --success: #10b981;
   --warning: #f59e0b;
   --danger: #ef4444;
   --info: #3b82f6;
-  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 20px rgba(0, 0, 0, 0.4);
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 8px 32px rgba(0, 0, 0, 0.5);
+  --shadow-glow: 0 0 40px rgba(99, 102, 241, 0.15);
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
   --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  --glass-blur: blur(20px);
 }
 
 * {
@@ -173,8 +179,13 @@ body {
 }
 
 @keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 .stats-grid {
@@ -481,6 +492,7 @@ body {
     transform: translateX(100%);
     opacity: 0;
   }
+
   to {
     transform: translateX(0);
     opacity: 1;
@@ -541,4 +553,593 @@ textarea:focus,
 select:focus {
   outline: none;
   border-color: var(--accent-primary);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+}
+
+/* =================================
+   GLASSMORPHISM PANEL STYLES
+================================= */
+
+.panel {
+  background: var(--bg-glass);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  margin-bottom: 24px;
+  overflow: hidden;
+  box-shadow: var(--shadow-md), var(--shadow-glow);
+  transition: var(--transition);
+}
+
+.panel:hover {
+  border-color: var(--border-glow);
+  box-shadow: var(--shadow-md), 0 0 30px rgba(99, 102, 241, 0.12);
+}
+
+.stat-card {
+  background: var(--bg-glass);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 20px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  transition: var(--transition);
+}
+
+.stat-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--border-glow);
+  box-shadow: var(--accent-glow);
+}
+
+/* =================================
+   NEURAL BRAIN VISUALIZATION
+================================= */
+
+.neural-brain-container {
+  background: var(--bg-glass);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  margin-bottom: 24px;
+  position: relative;
+  overflow: hidden;
+}
+
+.neural-brain-container::before {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: radial-gradient(ellipse at center, rgba(139, 92, 246, 0.08) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.neural-brain-svg {
+  width: 100%;
+  max-width: 400px;
+  height: auto;
+  margin: 0 auto;
+  display: block;
+}
+
+/* Connection lines */
+.connection-idle {
+  transition: all 0.5s ease;
+}
+
+.connection-active {
+  animation: pulseConnection 1.5s ease-out;
+}
+
+@keyframes pulseConnection {
+  0% {
+    stroke-width: 1;
+    opacity: 0.3;
+  }
+
+  50% {
+    stroke-width: 4;
+    opacity: 1;
+  }
+
+  100% {
+    stroke-width: 1;
+    opacity: 0.3;
+  }
+}
+
+/* Module nodes */
+.module-node {
+  transition: all 0.3s ease;
+}
+
+.module-node .module-circle {
+  transition: all 0.3s ease;
+  cursor: pointer;
+}
+
+.module-node:hover .module-circle {
+  transform-origin: center;
+  filter: brightness(1.2);
+}
+
+.module-idle .module-circle {
+  opacity: 0.7;
+}
+
+.module-active .module-circle {
+  opacity: 1;
+}
+
+.module-highlight .module-circle {
+  animation: pulseModule 1.5s ease-out;
+}
+
+.module-glow {
+  animation: glowPulse 2s ease-in-out infinite;
+}
+
+@keyframes pulseModule {
+  0% {
+    transform: scale(1);
+  }
+
+  50% {
+    transform: scale(1.15);
+  }
+
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes glowPulse {
+
+  0%,
+  100% {
+    opacity: 0.2;
+  }
+
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* Neural legend */
+.neural-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-color);
+  justify-content: center;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.legend-text {
+  opacity: 0.8;
+}
+
+/* =================================
+   ENHANCED OVERVIEW GRID
+================================= */
+
+.overview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+
+.overview-brain-section {
+  grid-column: span 2;
+}
+
+@media (max-width: 900px) {
+  .overview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .overview-brain-section {
+    grid-column: span 1;
+  }
+}
+
+/* =================================
+   AMBIENT ANIMATION KEYFRAMES
+================================= */
+
+@keyframes float {
+
+  0%,
+  100% {
+    transform: translateY(0px);
+  }
+
+  50% {
+    transform: translateY(-5px);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.shimmer-effect {
+  background: linear-gradient(90deg,
+      transparent 0%,
+      rgba(139, 92, 246, 0.1) 50%,
+      transparent 100%);
+  background-size: 200% 100%;
+  animation: shimmer 3s infinite;
+}
+
+/* =================================
+   NEURAL BRAIN REAL-TIME STYLES
+================================= */
+
+.neural-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  position: relative;
+  z-index: 1;
+}
+
+.neural-header h4 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.health-badge {
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.health-badge.healthy {
+  background: rgba(16, 185, 129, 0.2);
+  color: var(--success);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.health-badge.warning {
+  background: rgba(245, 158, 11, 0.2);
+  color: var(--warning);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.neural-loading {
+  text-align: center;
+  padding: 40px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+/* Module glow animation */
+.module-glow-ring {
+  animation: glowPulse 2s ease-in-out infinite;
+}
+
+.module-active .module-circle {
+  transition: all 0.3s ease;
+}
+
+.activity-label {
+  opacity: 0.8;
+  animation: fadeInOut 3s ease-in-out infinite;
+}
+
+@keyframes fadeInOut {
+
+  0%,
+  100% {
+    opacity: 0.6;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Activity Feed */
+.neural-activity-feed {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-color);
+  position: relative;
+  z-index: 1;
+}
+
+.neural-activity-feed h5 {
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.activity-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.activity-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  animation: slideInLeft 0.3s ease;
+}
+
+@keyframes slideInLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.activity-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.activity-source {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.activity-arrow {
+  color: var(--accent-primary);
+}
+
+.activity-target {
+  color: var(--text-secondary);
+}
+
+.activity-type {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 10px;
+  background: var(--bg-tertiary);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.activity-empty {
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+  padding: 16px;
+}
+
+/* Data cards grid */
+.neural-data-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+  position: relative;
+  z-index: 1;
+}
+
+.neural-data-card {
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: var(--radius-sm);
+  border-left: 3px solid;
+  padding: 12px;
+}
+
+.data-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.data-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.data-card-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.data-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+}
+
+.data-key {
+  color: var(--text-muted);
+  text-transform: capitalize;
+}
+
+.data-value {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+/* Connection animation */
+.connection-active {
+  animation: connectionPulse 1.2s ease-out;
+}
+
+@keyframes connectionPulse {
+  0% {
+    stroke-width: 1;
+    opacity: 0.2;
+  }
+
+  25% {
+    stroke-width: 4;
+    opacity: 1;
+  }
+
+  100% {
+    stroke-width: 1;
+    opacity: 0.2;
+  }
+}
+
+/* =================================
+   TOOLS PANEL
+================================= */
+
+.tools-panel {
+  background: var(--bg-glass);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  margin-top: 24px;
+}
+
+.tools-panel .panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.tools-panel .panel-header h3 {
+  margin: 0;
+  font-size: 16px;
+  color: var(--text-primary);
+}
+
+.tools-badge {
+  background: rgba(99, 102, 241, 0.2);
+  color: var(--accent-primary);
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.tools-loading,
+.tools-empty {
+  color: var(--text-muted);
+  text-align: center;
+  padding: 24px;
+  font-size: 13px;
+}
+
+.tools-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.tool-card {
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  transition: all 0.2s ease;
+}
+
+.tool-card:hover {
+  border-color: var(--accent-primary);
+  transform: translateY(-2px);
+}
+
+.tool-card.tool-used {
+  border-left: 3px solid var(--success);
+}
+
+.tool-card.tool-disabled {
+  opacity: 0.5;
+}
+
+.tool-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.tool-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-transform: capitalize;
+}
+
+.tool-count {
+  background: var(--accent-primary);
+  color: white;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  min-width: 24px;
+  text-align: center;
+}
+
+.tool-description {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+  margin-bottom: 8px;
+}
+
+.tool-last-used {
+  font-size: 10px;
+  color: var(--text-muted);
+  opacity: 0.7;
 }

@@ -72,3 +72,5 @@ def register_background_jobs(app) -> None:
         first=2400,
         name="topic_analysis",
     )
+
+

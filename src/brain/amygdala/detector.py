@@ -81,3 +81,5 @@ class EmotionDetector:
             del self._cache[oldest_key]
         
         self._cache[text_hash] = (emotion, intensity, datetime.now())
+
+

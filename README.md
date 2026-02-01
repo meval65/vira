@@ -1,132 +1,148 @@
-# VIRA Personal Life OS (Neural Edition)
+# VIRA: Virtual Intelligent Responsive Assistant (Neural Edition)
 
-VIRA (Virtual Intelligent Responsive Assistant) adalah sistem operasi kehidupan pribadi berbasis AI yang dirancang dengan arsitektur neural modular untuk meniru fungsi otak manusia. Sistem ini mengintegrasikan manajemen memori jangka panjang, kecerdasan emosional, perencanaan tugas otentik, dan antarmuka dashboard real-time.
+VIRA adalah sistem operasi kehidupan pribadi (*Personal Life OS*) berbasis kecerdasan buatan yang dirancang dengan **arsitektur biomimetik**. Sistem ini meniru struktur dan fungsi otak manusia untuk menciptakan asisten yang tidak hanya sekadar "menjawab pertanyaan", tetapi juga memiliki ingatan jangka panjang, kecerdasan emosional, kemampuan perencanaan, dan mekanisme koreksi diri (*self-correction*).
 
-## 🧠 Arsitektur Neural
-
-Sistem dibangun di atas modul-modul independen yang berkomunikasi melalui **Neural Event Bus** (`brainstem.py`), memungkinkan aliran data yang reaktif dan terorganisir.
-
-### 🧩 Modul Utama (Biological Mapping)
-
-| Modul Biologis | File Source | Fungsi Utama |
-| :--- | :--- | :--- |
-| **Brainstem** | `src/brainstem.py` | Pusat Inisialisasi, Konfigurasi, & Event Bus (Saraf Pusat). |
-| **Hippocampus** | `src/hippocampus.py` | Sistem Memori Jangka Panjang (MongoDB), Knowledge Graph, & RAG. |
-| **Prefrontal Cortex** | `src/prefrontal_cortex.py` | Pengambilan Keputusan, Perencanaan (LLM), & Pemrosesan Input. |
-| **Amygdala** | `src/amygdala.py` | Pemrosesan Emosi, Sentimen, & Adaptasi Kepribadian. |
-| **Thalamus** | `src/thalamus.py` | Manajemen Konteks, Routing Pesan, & Filter Riwayat Chat. |
-| **Cerebellum** | `src/cerebellum.py` | Tugas Latar Belakang (Background Jobs), Maintenance, & Otomatisasi. |
-| **Motor Cortex** | `src/motor_cortex.py` | Antarmuka Eksekusi (Telegram Bot Handlers & Output). |
-| **Occipital Lobe** | `src/occipital_lobe.py` | Visualisasi Sistem (Dashboard API & WebSocket). |
-| **Medulla Oblongata** | `src/medulla_oblongata.py` | Utilitas Dasar, Rate Limiting, & File Handling. |
+Sistem ini berjalan di atas Telegram sebagai antarmuka utama dan dilengkapi dengan Web Dashboard untuk pemantauan aktivitas neural secara *real-time*.
 
 ---
 
-## 📂 Struktur File & Tanggung Jawab
+## 🧠 Arsitektur Neural (`src/brain`)
 
-### `/src`
+Inti dari VIRA bernama **`src/brain`**, yang terdiri dari modul-modul terpisah (lobus) yang saling berkomunikasi melalui **Neural Event Bus** (berbasis Redis atau In-Memory). Berikut adalah bedah detail dari setiap komponen otak VIRA:
 
-*   **`brainstem.py`**
-    *   Menginisialisasi seluruh sistem (Bootloader).
-    *   Mengelola koneksi ke OpenRouter API.
-    *   Menyediakan `NeuralEventBus` untuk komunikasi antar modul secara asynchronous.
+### 1. 🌲 Brainstem (Batang Otak)
+**Lokasi:** `src/brain/brainstem.py`
+*   **Fungsi Utama:** Bootloader, Sistem Saraf Pusat, & Router LLM.
+*   **Cara Kerja:**
+    *   Menginisialisasi seluruh organ lain saat startup.
+    *   Mengelola **Neural Event Bus** untuk komunikasi *asynchronous* antar modul.
+    *   **OpenRouter Client dengan Health Check:** Secara otomatis memantau kesehatan model LLM (Latency, Error Rate) dan melakukan *fallback* ke model lain/tier lebih rendah jika model utama *down* atau lambat.
+    *   Menjadwalkan *background jobs* (Cerebellum).
 
-*   **`hippocampus.py`**
-    *   Menyimpan memori di MongoDB (`memories`).
-    *   Mengelola Knowledge Graph (`knowledge_graph`) untuk relasi entitas.
-    *   Melakukan pencarian vektor (Vector Search) untuk RAG (Retrieval-Augmented Generation).
-    *   Menangani kompresi memori otomatis untuk menghemat konteks.
+### 2. 🏛️ Hippocampus (Memori & Pembelajaran)
+**Lokasi:** `src/brain/hippocampus`
+*   **Fungsi Utama:** Memori Jangka Panjang, Pengelolaan Pengetahuan (*Knowledge Graph*), & RAG.
+*   **Fitur Detail:**
+    *   **Vector Search:** Menyimpan memori dalam bentuk vektor (embedding) di MongoDB untuk pencarian berbasis makna (*semantic search*), bukan sekadar kata kunci.
+    *   **Knowledge Graph:** Memetakan hubungan antar entitas (misal: `User` - *likes* -> `Coding`, `Coding` - *requires* -> `Coffee`).
+    *   **Memory Compression:** Secara otomatis merangkum memori lama agar hemat token namun konteks tetap terjaga.
 
-*   **`prefrontal_cortex.py`**
-    *   Otak utama yang memproses input pengguna.
-    *   Mengintegrasikan memori, konteks, dan emosi untuk menghasilkan respons.
-    *   Menangani perencanaan tugas kompleks (Task Planning).
-    *   Ekstraksi intent (Maksud) dari percakapan.
+### 3. 👑 Prefrontal Cortex (Eksekutif & Perencanaan)
+**Lokasi:** `src/brain/prefrontal_cortex`
+*   **Fungsi Utama:** Pengambilan Keputusan, Perencanaan Tugas (*Planning*), & Penalar Tingkat Tinggi.
+*   **Cara Kerja:**
+    *   Menerima input mentah dan memutuskan modul mana yang harus merespons.
+    *   Memecah instruksi kompleks menjadi langkah-langkah logis (*Step-by-step Plan*).
+    *   Menggunakan LLM tercerdas (*Analysis Model*) untuk menangani logika berat.
 
-*   **`amygdala.py`**
-    *   Menganalisis sentimen pengguna.
-    *   Menyimpan state emosi internal (Satisfaction, Mood).
-    *   Memodifikasi instruksi prompt berdasarkan mood saat ini (e.g., Happy vs. Sad).
+### 4. 🎭 Amygdala (Emosi & Kepribadian)
+**Lokasi:** `src/brain/amygdala`
+*   **Fungsi Utama:** Pemrosesan Emosi, Sentimen, & Adaptasi Persona.
+*   **Fitur Detail:**
+    *   **Mood State:** VIRA memiliki status emosi internal (Happy, Concerned, Neutral, dll) yang berubah berdasarkan interaksi pengguna.
+    *   **Empathy Response:** Nada bicara VIRA beradaptasi dengan emosi pengguna (misal: merespons dengan lembut saat pengguna terdeteksi sedih).
+    *   **Emotional Decay:** Emosi akan kembali ke netral seiring berjalannya waktu (normalisasi), meniru sifat alami manusia.
 
-*   **`thalamus.py`**
-    *   Menyusun "Prompt Context Window" yang efisien.
-    *   Memfilter riwayat chat yang relevan menggunakan embedding.
-    *   Mencegah overload token pada LLM.
+### 5. 📡 Thalamus (Relay & Manajemen Konteks)
+**Lokasi:** `src/brain/thalamus`
+*   **Fungsi Utama:** Filter Informasi, Manajemen Sesi, & *Insight*.
+*   **Cara Kerja:**
+    *   **Context Window Management:** Memilih potongan riwayat chat yang paling relevan untuk dikirim ke LLM, menjaga efisiensi token dan biaya.
+    *   **Insight Generation:** Secara pasif menganalisis percakapan untuk menemukan pola atau fakta baru tentang pengguna tanpa diminta.
 
-*   **`cerebellum.py`**
-    *   Menjalankan *Cron Jobs* (Tugas berkala).
-    *   Pembersihan sesi lama, pengecekan jadwal pengingat, dan optimasi database.
-    *   Berjalan di thread terpisah agar tidak memblokir chat utama.
+### 6. 🛠️ Parietal Lobe (Refleks & Alat)
+**Lokasi:** `src/brain/parietal_lobe`
+*   **Fungsi Utama:** Eksekusi Alat (*Tool Use*), Kemampuan Sensorik, & Kalkulasi.
+*   **Fitur Unggulan ("Reflexes"):**
+    *   Modul ini merespons perintah teknis secara deterministik (pasti) dan cepat.
+    *   **Sandboxed Python Execution:** Mampu menjalankan kode Python secara **aman di dalam Docker container terisolasi**. Ini memungkinkan VIRA melakukan perhitungan matematika kompleks, analisis data, atau simulasi algoritma tanpa membahayakan sistem inang.
+    *   **Real-time Math & Time:** Kalkulasi matematika presisi dan pengecekan waktu lokal.
+    *   **Weather Info:** Integrasi API cuaca untuk konteks lingkungan.
 
-*   **`motor_cortex.py`**
-    *   Handler untuk perintah Telegram (`/start`, `/status`, dll).
-    *   Mengelola input teks, foto, dan dokumen dari pengguna.
-    *   Mengirim respons balik ke pengguna (termasuk chunking pesan panjang).
+### 7. ⚖️ Medulla Oblongata (Fungsi Otonom)
+**Lokasi:** `src/brain/medulla_oblongata`
+*   **Fungsi Utama:** Penjaga Kestabilan Sistem.
+*   **Cara Kerja:**
+    *   **Rate Limiting:** Mencegah sistem dibanjiri permintaan (*spam protection*).
+    *   Menangani fungsi-fungsi utilitas tingkat rendah yang menjaga agar sistem tetap berjalan ("bernapas").
 
-*   **`occipital_lobe.py`**
-    *   Menjalankan server FastAPI untuk Dashboard Lokal (`localhost:5000`).
-    *   Websocket server untuk visualisasi aktivitas neural realtime.
-    *   API endpoint untuk manajemen memori dan persona via Web UI.
+### 8. ⚙️ Cerebellum (Pemeliharaan & Otomatisasi)
+**Lokasi:** `src/brain/cerebellum`
+*   **Fungsi Utama:** *Background Tasks*, Koordinasi Rutin, & Pembersihan.
+*   **Fitur Detail:**
+    *   Menjalankan tugas pemeliharaan rutin (Cron Jobs).
+    *   **Nocturnal Consolidation (Siklus Tidur):** Setiap jam 3 pagi, sistem menjalankan "konsolidasi memori" besar-besaran—merapikan database, memperkuat ingatan penting, dan menghapus *noise* dari hari sebelumnya, mirip proses tidur pada manusia.
 
-*   **`medulla_oblongata.py`**
-    *   Fungsi bantu (Helper functions).
-    *   Manajemen unduhan file sementara.
-    *   Rate limiting untuk mencegah spam.
+### 9. 🛡️ Self Correction System (Sistem Imun Kognitif)
+**Lokasi:** `src/brain/self_correction.py`
+*   **Fungsi Utama:** Pemulihan Kesalahan Otomatis.
+*   **Cara Kerja:**
+    *   Jika sebuah alat (misal: Kode Python atau Query Database) gagal, sistem ini tidak langsung menyerah.
+    *   Ia melakukan **"Critique"**: Menggunakan LLM terpisah untuk menganalisis pesan error.
+    *   **Strategy Adjustment:** Memutuskan strategi perbaikan (misal: memperbaiki argumen variabel, mencoba alat alternatif, atau mengubah format data) dan mencoba ulang eksekusi secara otomatis (*auto-retry loop*).
+
+### 10. 👁️ Occipital Lobe (Visualisasi)
+**Lokasi:** `src/brain/occipital_lobe`
+*   **Fungsi Utama:** Dashboard Antarmuka.
+*   **Fitur:**
+    *   Menyediakan API dan WebSocket server untuk Web Dashboard (`localhost:5000`).
+    *   Memvisualisasikan aktivitas otak, status memori, dan log chat secara *live*.
+
+### 11. 🗣️ Motor Cortex (Eksekusi Gerak)
+**Lokasi:** `src/brain/motor_cortex`
+*   **Fungsi Utama:** Antarmuka Eksternal (Telegram).
+*   **Cara Kerja:**
+    *   Menangani input/output pesan Telegram.
+    *   Mengatur *chunking* pesan (memecah respons panjang).
+    *   Menangani file upload/download dari user.
 
 ---
 
-## ✨ Fitur Utama
+## 🚀 Fitur Unggulan
 
-1.  **Memori Jangka Panjang (Persistent Memory)**
-    *   Vira mengingat fakta, preferensi, dan peristiwa masa lalu menggunakan MongoDB.
-    *   Sistem pencarian *semantic* (bukan hanya keyword) untuk konteks yang lebih baik.
+1.  **Ingatan Abadi (Persistent Memory)**
+    VIRA tidak akan lupa. Ia menyimpan preferensi, fakta, dan konteks percakapan dalam jangka panjang menggunakan kombinasi MongoDB dan *Vector Store*.
 
-2.  **Kecerdasan Emosional**
-    *   Vira memiliki "perasaan" yang berubah berdasarkan interaksi.
-    *   Respon tone berubah (misal: lebih empatik saat pengguna sedih).
+2.  **Eksekusi Kode Aman (Docker Sandbox)**
+    VIRA bukan sekadar chatbot teks. Ia bisa menjadi *Data Analyst* dengan menulis dan *menjalankan* kode Python sungguhan di lingkungan aman untuk menjawab pertanyaan berbasis komputasi.
 
-3.  **Manajemen Jadwal & Pengingat**
-    *   Deteksi otomatis jadwal dari percakapan ("Ingatkan rapat besok jam 9").
-    *   Notifikasi proaktif via Telegram.
+3.  **Kecerdasan Emosional Dinamis**
+    VIRA merespons dengan nuansa emosi yang tepat, membuatnya terasa lebih hidup dibandingkan AI asisten standar yang kaku.
 
-4.  **Dashboard Visual Real-time**
-    *   Pantau apa yang "dipikirkan" Vira melalui Web Dashboard.
-    *   Lihat grafik memori, log chat, dan status emosi secara langsung.
-
-5.  **Multi-Model LLM Support**
-    *   Terintegrasi penuh dengan **OpenRouter** (Claude, GPT-4, Llama, Gemini, dll).
-    *   Sistem *Fallback* otomatis jika satu model gagal/down.
-
-6.  **Task & Implementation Planning**
-    *   Mampu memecah permintaan kompleks menjadi rencana langkah demi langkah.
+4.  **Resiliensi Tinggi**
+    Dengan **Circuit Breaker** pada API LLM dan **Self-Correction Loop** pada eksekusi alat, VIRA dirancang untuk tetap berjalan stabil meskipun terjadi kesalahan jaringan atau halusinasi model.
 
 ---
 
-## 🚀 Cara Menjalankan
+## 🛠 Teknologi
+
+*   **Bahasa Utama:** Python 3.10+
+*   **LLM Engine:** OpenRouter (Mendukung Claude 3.5 Sonnet, GPT-4o, Llama 3, DeepSeek, dll).
+*   **Database:** MongoDB (Data Dokumen) & Vector Search.
+*   **Cache/Bus:** Redis (Opsional) atau In-Memory.
+*   **Visualization:** FastAPI & Uvicorn (Dashboard).
+*   **Isolation:** Docker (untuk Python Sandbox).
+*   **Interface:** Python-Telegram-Bot.
+
+## 📦 Cara Memulai
 
 1.  **Persiapan Environment**
-    Pastikan `.env` sudah dikonfigurasi dengan:
+    Salin `.env.example` ke `.env` dan isi kredensial yang dibutuhkan:
     *   `TELEGRAM_BOT_TOKEN`
-    *   `ADMIN_TELEGRAM_ID`
     *   `OPENROUTER_API_KEY`
     *   `MONGODB_URI`
+    *   `(Opsional) METEOSOURCE_API_KEY` untuk fitur cuaca.
 
-2.  **Jalankan Sistem**
-    Gunakan perintah berikut di terminal:
+2.  **Instalasi Dependensi**
     ```bash
-    python -m src.brainstem
+    pip install -r requirements.txt
+    ```
+    *Pastikan Docker Desktop berjalan jika ingin menggunakan fitur Python Sandbox.*
+
+3.  **Jalankan VIRA**
+    ```bash
+    python -m src.brain.brainstem
     ```
 
-3.  **Akses Dashboard**
-    Buka browser dan navigasi ke:
-    `http://localhost:5000`
-
----
-
-## 🛠 Tech Stack
-*   **Language**: Python 3.10+
-*   **Interface**: Python-Telegram-Bot
-*   **Database**: MongoDB (Motor Async Driver)
-*   **LLM Provider**: OpenRouter API
-*   **Backend API**: FastAPI (untuk Dashboard)
-*   **Embedding**: Ollama (Local) / Remote Fallback
+4.  **Akses Dashboard**
+    Buka `http://localhost:5000` di antarmuka web.

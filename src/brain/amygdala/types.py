@@ -243,3 +243,5 @@ class EmotionalState(BaseModel):
         self.pad_valence = clamped.valence
         self.pad_arousal = clamped.arousal
         self.pad_dominance = clamped.dominance
+
+

@@ -44,3 +44,5 @@ async def background_schedule_checker(context: ContextTypes.DEFAULT_TYPE) -> Non
                     await NeuralEventBus.clear_activity("cerebellum")
     except Exception as e:
         logger.error("Schedule checker failed: %s", e)
+
+

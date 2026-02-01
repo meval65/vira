@@ -6,7 +6,7 @@ import numpy as np
 import PIL.Image
 from google.genai import types
 
-from src.brain.db.mongo_client import MongoDBClient
+from src.brain.infrastructure.mongo_client import MongoDBClient
 from .types import SessionMessage
 
 
@@ -234,3 +234,5 @@ class SessionManagerMixin:
 
     def mark_memory_analysis_done(self, count: int) -> None:
         self._metadata["last_analysis_count"] = count
+
+

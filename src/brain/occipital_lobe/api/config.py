@@ -2,7 +2,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
-from src.brain.db.mongo_client import get_mongo_client
+from src.brain.infrastructure.mongo_client import get_mongo_client
 from src.brain.brainstem import get_brain, SYSTEM_CONFIG
 
 router = APIRouter(tags=["config"])
@@ -109,3 +109,5 @@ async def update_system_config(data: SystemConfigUpdate):
     )
     
     return {"status": "updated"}
+
+

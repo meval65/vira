@@ -44,3 +44,5 @@ class EmotionDynamics:
             pad.arousal + formality_mod,
             pad.dominance + satisfaction_mod * 0.5
         ).clamp()
+
+

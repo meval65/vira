@@ -33,3 +33,5 @@ async def background_proactive_check(context: ContextTypes.DEFAULT_TYPE) -> None
     except Exception as e:
         logger.error("Proactive check failed: %s", e)
         await NeuralEventBus.clear_activity("cerebellum")
+
+

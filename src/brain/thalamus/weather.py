@@ -46,3 +46,5 @@ class WeatherMixin:
             return False
         age = (datetime.datetime.now() - self._weather_timestamp).total_seconds()
         return age < self.WEATHER_CACHE_TTL
+
+

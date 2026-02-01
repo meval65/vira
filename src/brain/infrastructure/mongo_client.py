@@ -280,3 +280,5 @@ async def close_mongodb() -> None:
     global _mongo_client
     if _mongo_client:
         await _mongo_client.close()
+
+

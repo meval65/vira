@@ -65,3 +65,5 @@ async def handle_photo(update: Update, user_dir: str) -> Optional[str]:
         logger.error("Photo handling error: %s", e)
         await update.message.reply_text("❌ Gagal memproses foto")
         return None
+
+

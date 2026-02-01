@@ -28,3 +28,5 @@ async def background_emotional_decay(context: ContextTypes.DEFAULT_TYPE) -> None
     except Exception as e:
         logger.error("Emotional decay failed: %s", e)
         await NeuralEventBus.clear_activity("cerebellum")
+
+

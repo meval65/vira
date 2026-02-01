@@ -341,6 +341,11 @@ class NeuralEventBusRedis:
         
         return modules
     
+    @classmethod
+    def get_current_activity(cls) -> Dict[str, str]:
+        """Get current activity descriptions for all modules."""
+        return cls._current_activity.copy()
+    
     async def get_event_history(
         self,
         source: Optional[str] = None,
@@ -415,3 +420,5 @@ async def init_event_bus(mongo_client=None) -> NeuralEventBusRedis:
     bus = get_event_bus()
     await bus.initialize(mongo_client)
     return bus
+
+

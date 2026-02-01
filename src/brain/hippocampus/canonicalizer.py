@@ -1,7 +1,19 @@
 import json
 import hashlib
 from typing import Dict, Optional
-from src.brain.constants import CANONICALIZATION_INSTRUCTION
+
+CANONICALIZATION_INSTRUCTION = """
+Analyze the provided text and extract Knowledge Graph Triples.
+Format: [Subject, Relation, Object]
+- Subject: The main entity (noun).
+- Relation: The relationship (verb phrase, e.g., "is", "has", "likes").
+- Object: The target entity or attribute.
+
+Rules:
+- Use standard relations where possible: has, is, likes, works_at, lives_in, knows, related_to, created, owns, member_of, part_of, causes, located_in.
+- Keep subjects and objects canonical (e.g., "John Smith" instead of "he").
+- Return a JSON object with a key "triples" containing a list of strings, each formatted as "Subject|Relation|Object".
+"""
 
 
 class Canonicalizer:
@@ -69,3 +81,5 @@ class Canonicalizer:
                 except json.JSONDecodeError:
                     pass
         return None
+
+

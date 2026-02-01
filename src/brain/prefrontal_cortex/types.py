@@ -199,3 +199,5 @@ class ProcessingMetrics:
 
     def get_success_rate(self) -> float:
         return (self.successful_requests / self.total_requests * 100) if self.total_requests > 0 else 0.0
+
+

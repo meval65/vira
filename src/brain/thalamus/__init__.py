@@ -2,7 +2,7 @@ import uuid
 import datetime
 from typing import List, Dict, Optional, Any
 
-from src.brain.db.mongo_client import get_mongo_client, MongoDBClient
+from src.brain.infrastructure.mongo_client import get_mongo_client, MongoDBClient
 
 from .types import (
     InsightType, InsightPriority, ContextPriority,
@@ -95,3 +95,5 @@ __all__ = [
     "ProactiveInsight",
     "SessionMessage"
 ]
+
+

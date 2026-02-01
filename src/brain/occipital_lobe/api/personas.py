@@ -4,7 +4,7 @@ from bson.errors import InvalidId
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional, Dict, List, Union
-from src.brain.db.mongo_client import get_mongo_client
+from src.brain.infrastructure.mongo_client import get_mongo_client
 from src.brain.brainstem import get_brain
 
 router = APIRouter(prefix="/api/personas", tags=["personas"])
@@ -208,3 +208,5 @@ async def activate_persona(persona_id: str):
             "is_active": True
         }
     }
+
+

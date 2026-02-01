@@ -14,7 +14,7 @@ from src.brain.hippocampus.schedule_manager import ScheduleManager
 from src.brain.hippocampus.visual_memory import VisualMemory
 from src.brain.hippocampus.storage_utils import StorageUtils
 
-from src.brain.db.mongo_client import get_mongo_client, MongoDBClient
+from src.brain.infrastructure.mongo_client import get_mongo_client, MongoDBClient
 from src.brain.brainstem import MAX_RETRIEVED_MEMORIES, MIN_RELEVANCE_SCORE
 
 
@@ -452,3 +452,5 @@ class Hippocampus:
         return await self._insights_manager.run_daydream_cycle(
             self.get_recent_chat_history, self.recall
         )
+
+

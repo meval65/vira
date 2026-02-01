@@ -50,3 +50,5 @@ class WebSocketLogHandler(logging.Handler):
                 pass
         except Exception:
             self.handleError(record)
+
+

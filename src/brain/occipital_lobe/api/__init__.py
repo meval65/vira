@@ -10,6 +10,8 @@ from . import maintenance
 from . import openrouter
 from . import neural_events
 from . import search
+from . import brain_state
+from . import tools
 
 __all__ = [
     "memories",
@@ -23,5 +25,7 @@ __all__ = [
     "maintenance",
     "openrouter",
     "neural_events",
-    "search"
+    "search",
+    "brain_state",
+    "tools"
 ]

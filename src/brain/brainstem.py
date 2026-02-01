@@ -31,7 +31,6 @@ load_dotenv()
 
 ADMIN_ID: str = os.getenv("ADMIN_TELEGRAM_ID", "")
 TELEGRAM_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
-DB_PATH: str = os.getenv("DB_PATH", "storage/memory.db")
 OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_BASE_URL: str = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 OPENROUTER_SITE_URL: str = os.getenv("OPENROUTER_SITE_URL", "https://vira-os.local")
@@ -40,33 +39,18 @@ OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
 EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "embeddinggemma")
 METEOSOURCE_API_KEY: Optional[str] = os.getenv("METEOSOURCE_API_KEY")
 
-OPENROUTER_MODELS: Dict[str, List[str]] = {
-    "chat_model": [
-        "deepseek/deepseek-v3.2",
-        "tngtech/deepseek-r1t2-chimera:free",
-        "openai/gpt-oss-120b:free",
-    ],
-    "analysis_model": [
-        "tngtech/deepseek-r1t2-chimera:free",
-        "openai/gpt-oss-120b:free",
-    ],
-    "utility_model": [
-        "nvidia/nemotron-3-nano-30b-a3b:free",
-        "openai/gpt-oss-120b:free",
-    ]
-}
+MODEL_LIST: List[str] = [
+    "nvidia/nemotron-3-nano-30b-a3b:free",
+    "tngtech/deepseek-r1t2-chimera:free",
+]
 
-@lru_cache(maxsize=1)
-def get_main_chat_model() -> str:
-    return OPENROUTER_MODELS.get("chat_model", ["nvidia/nemotron-3-nano-30b-a3b:free"])[0]
+VISION_MODEL_LIST: List[str] = [
+    "nvidia/nemotron-3-nano-30b-a3b:free",
+    "openai/gpt-4o-mini",
+]
 
-@lru_cache(maxsize=1)
-def get_analysis_model() -> str:
-    return OPENROUTER_MODELS.get("analysis_model", ["nvidia/nemotron-3-nano-30b-a3b:free"])[0]
-
-@lru_cache(maxsize=1)
-def get_utility_model() -> str:
-    return OPENROUTER_MODELS.get("utility_model", ["nvidia/nemotron-3-nano-30b-a3b:free"])[0]
+def get_primary_model() -> str:
+    return MODEL_LIST[0] if MODEL_LIST else "nvidia/nemotron-3-nano-30b-a3b:free"
 
 EMBEDDING_DIMENSION: int = 1024
 MAX_RETRIEVED_MEMORIES: int = 3
@@ -96,7 +80,7 @@ class MoodState(str, Enum):
 
 class SystemConfig(BaseModel):
     admin_id: str = Field(default="")
-    chat_model: str = Field(default_factory=get_analysis_model)
+    chat_model: str = Field(default_factory=get_primary_model)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     top_p: float = Field(default=0.95, ge=0.0, le=1.0)
     max_output_tokens: int = Field(default=512, ge=1)
@@ -197,7 +181,6 @@ class OpenRouterClient:
         self.base_url = base_url
         self.config = config or ModelRotationConfig()
         self.health_scores: Dict[str, ModelHealthScore] = {}
-        self.tier_preference_order = ["chat_model", "analysis_model", "utility_model"]
         self._client = httpx.AsyncClient(timeout=60.0)
     
     async def close(self) -> None:
@@ -223,36 +206,20 @@ class OpenRouterClient:
             self.health_scores[model_id] = ModelHealthScore(model_id)
         return self.health_scores[model_id]
     
-    def _get_tier_models(self, tier: str) -> List[str]:
-        return OPENROUTER_MODELS.get(tier, [])
+    def _get_model_list(self, vision: bool = False) -> List[str]:
+        """Get the appropriate model list."""
+        return VISION_MODEL_LIST if vision else MODEL_LIST
     
-    def _get_all_models_in_tier_order(self) -> List[Tuple[str, str]]:
-        models = []
-        for tier in self.tier_preference_order:
-            for model in self._get_tier_models(tier):
-                models.append((tier, model))
-        return models
-    
-    def _select_best_model(self, tier: Optional[str] = None) -> Optional[str]:
-        if tier:
-            candidates = self._get_tier_models(tier)
-        else:
-            candidates = [model for _, model in self._get_all_models_in_tier_order()]
+    def _select_next_model(self, vision: bool = False) -> Optional[str]:
+        """Select the next available model from the list."""
+        models = self._get_model_list(vision)
         
-        available = [
-            model for model in candidates
-            if not self._get_health_score(model).should_skip(self.config)
-        ]
+        for model in models:
+            health = self._get_health_score(model)
+            if not health.should_skip(self.config):
+                return model
         
-        if not available:
-            return None
-        
-        best_model = max(
-            available,
-            key=lambda m: self._get_health_score(m).health_score
-        )
-        
-        return best_model
+        return None
     
     async def _make_request(
         self,
@@ -316,26 +283,15 @@ class OpenRouterClient:
         temperature: float = 0.7,
         max_tokens: int = 512,
         top_p: float = 0.95,
-        tier: Optional[str] = None,
         stream: bool = False,
         extra_body: Optional[Dict] = None
     ) -> Optional[Dict[str, Any]]:
+        """Execute chat completion with automatic model fallback."""
         
-        if tier:
-            model = self._select_best_model(tier)
-            if model:
-                result = await self._make_request(
-                    model, messages, temperature, max_tokens, top_p, stream, extra_body
-                )
-                if result:
-                    return result
-            
-            if not self.config.tier_fallback_enabled:
-                raise AllAPIExhaustedError(f"All models in {tier} exhausted")
-        
-        for attempt_tier, model in self._get_all_models_in_tier_order():
+        for model in MODEL_LIST:
             health = self._get_health_score(model)
             if health.should_skip(self.config):
+                logger.debug(f"Skipping {model} due to health score")
                 continue
             
             result = await self._make_request(
@@ -345,13 +301,69 @@ class OpenRouterClient:
             if result:
                 return result
             
+            # Exponential backoff before trying next model
             delay = min(
                 self.config.retry_delay_base * (2 ** health.consecutive_failures),
                 self.config.retry_delay_max
             )
             await asyncio.sleep(delay)
         
-        raise AllAPIExhaustedError("All models exhausted across all tiers")
+        raise AllAPIExhaustedError("All models in MODEL_LIST exhausted")
+    
+    async def vision_completion(
+        self,
+        prompt: str,
+        image_base64: str,
+        image_media_type: str = "image/jpeg",
+        temperature: float = 0.3,
+        max_tokens: int = 500
+    ) -> Optional[str]:
+        """
+        Execute vision completion with multimodal model.
+        
+        Args:
+            prompt: Text prompt describing what to analyze
+            image_base64: Base64-encoded image data
+            image_media_type: MIME type of the image
+            temperature: Model temperature
+            max_tokens: Maximum tokens in response
+            
+        Returns:
+            Generated text description or None
+        """
+        messages = [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{image_media_type};base64,{image_base64}"
+                    }
+                }
+            ]
+        }]
+        
+        for model in VISION_MODEL_LIST:
+            health = self._get_health_score(model)
+            if health.should_skip(self.config):
+                continue
+            
+            result = await self._make_request(
+                model, messages, temperature, max_tokens, top_p=0.95
+            )
+            
+            if result and "choices" in result and result["choices"]:
+                return result["choices"][0]["message"]["content"]
+            
+            delay = min(
+                self.config.retry_delay_base * (2 ** health.consecutive_failures),
+                self.config.retry_delay_max
+            )
+            await asyncio.sleep(delay)
+        
+        logger.error("All vision models exhausted")
+        return None
 
     async def quick_completion(
         self,
@@ -359,7 +371,7 @@ class OpenRouterClient:
         temperature: float = 0.7,
         max_tokens: int = 256,
         system: Optional[str] = None,
-        tier: Optional[str] = "utility_model",
+
         json_mode: bool = False
     ) -> str:
         messages = []
@@ -375,7 +387,6 @@ class OpenRouterClient:
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
-            tier=tier,
             extra_body=extra_body
         )
         
@@ -427,7 +438,7 @@ class BrainStem:
             from src.brain.amygdala import Amygdala
             from src.brain.thalamus import Thalamus
             from src.brain.parietal_lobe import ParietalLobe
-            from src.brain.db.mongo_client import get_mongo_client
+            from src.brain.infrastructure.mongo_client import get_mongo_client
 
             try:
                 await init_redis()
@@ -478,14 +489,14 @@ class BrainStem:
             logger.info(f"OpenRouter API: {'Configured' if api_status['api_configured'] else 'Not configured'}")
             
             logger.info("Neural System Ready")
-            logger.info(f"Primary Model: {get_main_chat_model()}")
+            logger.info(f"Primary Model: {get_primary_model()}")
             logger.info(f"Admin: {self.config.admin_id}")
             
             event_bus_status = self._event_bus.get_status() if self._event_bus else {}
             logger.info(f"Event Bus: Redis={'connected' if event_bus_status.get('redis_connected') else 'fallback'}")
             
             try:
-                from src.brain.consolidation.nocturnal_consolidator import NocturnalConsolidator
+                from src.brain.infrastructure.nocturnal_consolidator import NocturnalConsolidator
                 self._consolidator = NocturnalConsolidator(
                     hippocampus=self._hippocampus,
                     openrouter_client=self._openrouter,
@@ -719,3 +730,4 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
+
